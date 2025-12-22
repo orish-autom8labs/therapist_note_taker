@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import useSonioxClient from '../hooks/useSonioxClient';
 import useSessionTimer from '../hooks/useSessionTimer';
 import useAudioVisualizer from '../hooks/useAudioVisualizer';
@@ -10,7 +10,6 @@ import AudioVisualizer from './AudioVisualizer';
 function ActiveSession({ sessionData, user, onComplete, onStop }) {
   const [error, setError] = useState(null);
   const [audioStream, setAudioStream] = useState(null);
-  const [warningNotification, setWarningNotification] = useState(null);
   const transcriptEndRef = useRef(null);
   const sessionIdRef = useRef(null);
   const autoSaveCleanupRef = useRef(null);
@@ -55,15 +54,9 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
     maxDuration: 60 * 60 * 1000, // 60 minutes
     onWarning: (level, minutesRemaining) => {
       console.log(`[TIMER] Warning: ${level}, ${minutesRemaining} minutes remaining`);
-      if (level === 'warning') {
-        setWarningNotification(`⚠️ 15 minutes remaining`);
-      } else if (level === 'critical') {
-        setWarningNotification(`🔴 5 minutes remaining - session will auto-stop soon!`);
-      }
     },
     onMaxTime: () => {
       console.log('[TIMER] Max time reached - auto-stopping session');
-      setWarningNotification('⏰ 60-minute limit reached - auto-stopping session');
       setTimeout(() => {
         stopSession();
       }, 2000); // Give user 2 seconds to see the message
@@ -80,7 +73,6 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
     stopTranscription,
     isRecording,
   } = useSonioxClient({
-    language: 'he', // Hebrew
     enableSpeakerDiarization: true,
     onError: (err) => {
       console.error('[SONIOX] Transcription error:', err);
@@ -109,8 +101,10 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Combine final and non-final tokens
-  const allTokens = [...finalTokens, ...nonFinalTokens];
+  // Combine final and non-final tokens (using useMemo to prevent recreating on every render)
+  const allTokens = useMemo(() => {
+    return [...finalTokens, ...nonFinalTokens];
+  }, [finalTokens, nonFinalTokens]);
 
   // Auto-scroll to bottom
   useEffect(() => {

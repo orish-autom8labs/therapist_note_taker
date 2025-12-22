@@ -50,8 +50,7 @@ export default function useSonioxClient({
     try {
       await sonioxClient.current.start({
         model: 'stt-rt-v3',
-        enableLanguageIdentification: false, // We know the language
-        language: language, // Hebrew
+        enableLanguageIdentification: true, // Let Soniox detect language automatically
         enableSpeakerDiarization: enableSpeakerDiarization,
         enableEndpointDetection: true,
 
