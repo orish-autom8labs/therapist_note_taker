@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Manual SDK Test</title>
+    <script type="module">
+        import { SonioxClient } from 'https://cdn.jsdelivr.net/npm/@soniox/speech-to-text-web@1.2.0/dist/index.mjs';
+
+        async function getTemporaryAPIKey() {
+            console.log('[TEST] Fetching temporary API key...');
+            const response = await fetch('http://localhost:3001/v1/auth/temporary-api-key', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+            });
+            const data = await response.json();
+            console.log('[TEST] Got response:', data);
+            console.log('[TEST] Returning apiKey:', data.apiKey);
+            return data.apiKey;
+        }
+
+        window.testSDK = async function() {
+            console.log('[TEST] Creating SonioxClient...');
+
+            const client = new SonioxClient({
+                apiKey: getTemporaryAPIKey
+            });
+
+            console.log('[TEST] Starting transcription...');
+
+            await client.start({
+                model: 'stt-rt-v3',
+                enableLanguageIdentification: true,
+                enableSpeakerDiarization: true,
+
+                onStarted: () => {
+                    console.log('[TEST] ✅ SDK onStarted - SUCCESS!');
+                },
+
+                onError: (status, message, errorCode) => {
+                    console.error('[TEST] ❌ SDK onError:', { status, message, errorCode });
+                },
+
+                onPartialResult: (result) => {
+                    console.log('[TEST] 📝 Got tokens:', result.tokens.length);
+                },
+
+                onStateChange: ({ newState }) => {
+                    console.log('[TEST] State changed to:', newState);
+                }
+            });
+        };
+
+        console.log('[TEST] Ready! Call window.testSDK() to test');
+    </script>
+</head>
+<body>
+    <h1>Manual SDK Test</h1>
+    <p>Open browser console (F12) and run: <code>window.testSDK()</code></p>
+    <p>Make sure server is running on port 3001</p>
+</body>
+</html>
