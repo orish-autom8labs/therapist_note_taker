@@ -19,6 +19,8 @@ export default function useSessionTimer({
   const startTimeRef = useRef(null);
   const intervalRef = useRef(null);
   const warningTriggeredRef = useRef({ warning: false, critical: false });
+  const intervalCounterRef = useRef(0); // Track how many intervals created
+  const cleanupCounterRef = useRef(0); // Track how many times cleanup runs
 
   // Warning thresholds
   const warningTime = 45 * 60 * 1000; // 45 minutes
@@ -26,12 +28,19 @@ export default function useSessionTimer({
 
   // Start timer
   const start = useCallback(() => {
-    if (!isRunning) {
-      startTimeRef.current = Date.now() - elapsed;
-      setIsRunning(true);
-      warningTriggeredRef.current = { warning: false, critical: false };
-    }
-  }, [isRunning, elapsed]);
+    console.log('[TIMER] start() called, isRunning:', isRunning);
+    setIsRunning((currentIsRunning) => {
+      if (!currentIsRunning) {
+        startTimeRef.current = Date.now() - elapsed;
+        warningTriggeredRef.current = { warning: false, critical: false };
+        console.log('[TIMER] Timer will start, startTime:', startTimeRef.current);
+        return true;
+      } else {
+        console.log('[TIMER] Timer already running, ignoring start()');
+        return currentIsRunning;
+      }
+    });
+  }, [elapsed]);
 
   // Stop timer
   const stop = useCallback(() => {
@@ -51,11 +60,27 @@ export default function useSessionTimer({
 
   // Update elapsed time and check thresholds
   useEffect(() => {
+    intervalCounterRef.current += 1;
+    console.log('[TIMER] 🔄 useEffect RUN #' + intervalCounterRef.current + ', isRunning:', isRunning);
+    console.log('[TIMER] 📊 Dependencies changed - checking which ones...');
+    console.log('[TIMER]   - isRunning:', isRunning);
+    console.log('[TIMER]   - onWarning function ID:', onWarning?.toString().substring(0, 50));
+    console.log('[TIMER]   - onMaxTime function ID:', onMaxTime?.toString().substring(0, 50));
+    console.log('[TIMER]   - stop function ID:', stop?.toString().substring(0, 50));
+
     if (isRunning) {
+      console.log('[TIMER] ✅ Setting up interval, startTimeRef.current:', startTimeRef.current);
+      console.log('[TIMER] ✅ Interval will tick every 1000ms');
+
       intervalRef.current = setInterval(() => {
+        console.log('[TIMER] 🔔 TICK START - Inside setInterval callback');
         const now = Date.now();
+        console.log('[TIMER]   - now:', now);
+        console.log('[TIMER]   - startTimeRef.current:', startTimeRef.current);
         const newElapsed = now - startTimeRef.current;
+        console.log('[TIMER]   - calculated newElapsed:', newElapsed, '(' + Math.floor(newElapsed / 1000) + ' seconds)');
         setElapsed(newElapsed);
+        console.log('[TIMER] 🔔 TICK END - setElapsed called');
 
         // Check warning threshold (45 minutes)
         if (
@@ -88,11 +113,18 @@ export default function useSessionTimer({
         }
       }, 1000); // Update every second
 
+      console.log('[TIMER] ✅ Interval created with ID:', intervalRef.current);
+
       return () => {
+        cleanupCounterRef.current += 1;
+        console.log('[TIMER] 🧹 CLEANUP #' + cleanupCounterRef.current + ' - Clearing interval:', intervalRef.current);
         if (intervalRef.current) {
           clearInterval(intervalRef.current);
+          console.log('[TIMER] 🧹 Interval cleared');
         }
       };
+    } else {
+      console.log('[TIMER] ❌ Not setting up interval (isRunning is false)');
     }
   }, [isRunning, maxDuration, warningTime, criticalTime, onWarning, onMaxTime, stop]);
 

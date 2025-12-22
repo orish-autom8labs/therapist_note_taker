@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import useSonioxClient from '../hooks/useSonioxClient';
 import useSessionTimer from '../hooks/useSessionTimer';
 import useAudioVisualizer from '../hooks/useAudioVisualizer';
@@ -42,6 +42,18 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
   // Audio visualization
   const { waveformData, isActive: isAudioActive } = useAudioVisualizer(audioStream);
 
+  // Callbacks for session timer (memoized to prevent recreating on every render)
+  const handleTimerWarning = useCallback((level, minutesRemaining) => {
+    console.log(`[SESSION] ⚠️ Timer warning callback created/called: ${level}, ${minutesRemaining} minutes remaining`);
+  }, []); // No dependencies - callback never changes
+
+  const handleMaxTime = useCallback(() => {
+    console.log('[SESSION] ⏱️ Max time callback created/called - auto-stopping session');
+    setTimeout(() => {
+      stopSession();
+    }, 2000); // Give user 2 seconds to see the message
+  }, []); // No dependencies - callback never changes
+
   // Session timer with 60-minute limit
   const {
     elapsed,
@@ -52,15 +64,8 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
     formatTime,
   } = useSessionTimer({
     maxDuration: 60 * 60 * 1000, // 60 minutes
-    onWarning: (level, minutesRemaining) => {
-      console.log(`[TIMER] Warning: ${level}, ${minutesRemaining} minutes remaining`);
-    },
-    onMaxTime: () => {
-      console.log('[TIMER] Max time reached - auto-stopping session');
-      setTimeout(() => {
-        stopSession();
-      }, 2000); // Give user 2 seconds to see the message
-    },
+    onWarning: handleTimerWarning,
+    onMaxTime: handleMaxTime,
   });
 
   // Soniox SDK hook
@@ -80,7 +85,9 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
     },
     onStarted: () => {
       console.log('[SESSION] Transcription started');
+      console.log('[SESSION] Calling startTimer()');
       startTimer(); // Start timer when transcription starts
+      console.log('[SESSION] startTimer() called');
     },
     onFinished: () => {
       console.log('[SESSION] Transcription finished');
@@ -90,7 +97,9 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
 
   // Start session on mount
   useEffect(() => {
+    console.log('[SESSION] Starting transcription and timer');
     startTranscription();
+    startTimer(); // Start timer immediately, not waiting for SDK callback
 
     return () => {
       stopTranscription();

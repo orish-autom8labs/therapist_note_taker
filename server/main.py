@@ -208,13 +208,18 @@ async def save_transcript(
                         'Clinic/Transcripts'
                     )
                 
-                # Send email notification
+                # Send email notification (optional - don't fail if email fails)
                 if file_info.get('web_view_link'):
-                    await email_service.send_session_complete_email(
-                        patient_name,
-                        file_info['web_view_link'],
-                    )
-                
+                    try:
+                        await email_service.send_session_complete_email(
+                            patient_name,
+                            file_info['web_view_link'],
+                        )
+                        print(f'[EMAIL] Notification sent for session {session_id}')
+                    except Exception as email_error:
+                        print(f'[EMAIL] Failed to send notification: {email_error}')
+                        # Don't fail the save operation if email fails
+
                 # Clean up session
                 del active_sessions[session_id]
                 
@@ -274,15 +279,16 @@ def format_transcript(buffer: list) -> str:
     """Format transcript buffer into readable text."""
     output = ''
     current_speaker = None
-    
+
     for chunk in buffer:
         if chunk.get('speaker') and chunk['speaker'] != current_speaker:
             if current_speaker is not None:
                 output += '\n\n'
             output += f"{chunk.get('speaker', 'Unknown')}:\n"
             current_speaker = chunk['speaker']
-        output += chunk.get('text', '') + ' '
-    
+        # Don't add extra space - tokens already include proper spacing
+        output += chunk.get('text', '')
+
     return output.strip()
 
 
