@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Note Taker - MVP Mockup</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #F5F5F5;
+            color: #2C3E50;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .screen {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .screen.active {
+            display: block;
+        }
+
+        h1 {
+            color: #4A90E2;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        h2 {
+            color: #2C3E50;
+            margin-bottom: 20px;
+            font-size: 22px;
+        }
+
+        .subtitle {
+            color: #7F8C8D;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .feature-list {
+            list-style: none;
+            margin: 20px 0;
+        }
+
+        .feature-list li {
+            padding: 8px 0;
+            color: #27AE60;
+        }
+
+        .feature-list li:before {
+            content: "✓ ";
+            margin-left: 10px;
+        }
+
+        button {
+            width: 100%;
+            padding: 16px;
+            font-size: 18px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s;
+            margin-top: 10px;
+        }
+
+        .btn-primary {
+            background: #4A90E2;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #357ABD;
+        }
+
+        .btn-danger {
+            background: #E74C3C;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #C0392B;
+        }
+
+        .btn-success {
+            background: #27AE60;
+            color: white;
+        }
+
+        .btn-secondary {
+            background: #95A5A6;
+            color: white;
+        }
+
+        input[type="text"] {
+            width: 100%;
+            padding: 14px;
+            font-size: 16px;
+            border: 2px solid #BDC3C7;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            direction: rtl;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #4A90E2;
+        }
+
+        .recording-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+            color: #E74C3C;
+            font-weight: 600;
+        }
+
+        .recording-dot {
+            width: 12px;
+            height: 12px;
+            background: #E74C3C;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .transcript-area {
+            background: #F8F9FA;
+            border: 2px solid #E9ECEF;
+            border-radius: 8px;
+            padding: 20px;
+            min-height: 300px;
+            max-height: 500px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+            direction: rtl;
+            text-align: right;
+            font-size: 16px;
+            line-height: 1.8;
+        }
+
+        .transcript-empty {
+            color: #95A5A6;
+            text-align: center;
+            padding: 40px;
+        }
+
+        .speaker-label {
+            color: #4A90E2;
+            font-weight: 600;
+            margin-top: 15px;
+            margin-bottom: 5px;
+        }
+
+        .session-info {
+            background: #ECF0F1;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+
+        .success-icon {
+            text-align: center;
+            font-size: 64px;
+            color: #27AE60;
+            margin-bottom: 20px;
+        }
+
+        .file-info {
+            background: #ECF0F1;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            font-family: monospace;
+            font-size: 14px;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+        }
+
+        .button-group button {
+            flex: 1;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .back-link {
+            color: #4A90E2;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        .nav-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #ECF0F1;
+        }
+
+        .nav-tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border: none;
+            background: none;
+            color: #7F8C8D;
+            font-size: 14px;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+        }
+
+        .nav-tab.active {
+            color: #4A90E2;
+            border-bottom-color: #4A90E2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Screen 1: Login -->
+        <div class="screen active" id="screen-login">
+            <h1>📝 Note Taker</h1>
+            <p class="subtitle">Secure Session Transcription for Therapists</p>
+            
+            <ul class="feature-list">
+                <li>No recordings stored</li>
+                <li>Direct to your Google Drive</li>
+                <li>Hebrew transcription</li>
+                <li>Speaker identification</li>
+            </ul>
+
+            <button class="btn-primary" onclick="showScreen('setup')">
+                Sign in with Google
+            </button>
+        </div>
+
+        <!-- Screen 2: Session Setup -->
+        <div class="screen" id="screen-setup">
+            <div class="header">
+                <a class="back-link" onclick="showScreen('login')">← Back</a>
+                <h2>Note Taker</h2>
+            </div>
+
+            <h2>New Session</h2>
+
+            <label>Patient Name:</label>
+            <input type="text" id="patient-name" placeholder="הכנס שם מטופל..." value="דוגמה: יוסי כהן">
+
+            <div class="session-info">
+                📁 Save to: <strong>Clinic/Transcripts</strong>
+            </div>
+
+            <button class="btn-primary" onclick="startSession()">
+                Start Session
+            </button>
+        </div>
+
+        <!-- Screen 3: Active Transcription -->
+        <div class="screen" id="screen-recording">
+            <div class="header">
+                <a class="back-link" onclick="stopSession()">← Stop Session</a>
+                <h2>Note Taker</h2>
+            </div>
+
+            <div class="recording-indicator">
+                <div class="recording-dot"></div>
+                <span>Recording...</span>
+            </div>
+
+            <div class="session-info">
+                <strong>Patient:</strong> <span id="current-patient">יוסי כהן</span><br>
+                <strong>Started:</strong> <span id="session-time">14:30</span>
+            </div>
+
+            <div class="transcript-area" id="transcript">
+                <div class="transcript-empty">Waiting for speech...</div>
+            </div>
+
+            <button class="btn-danger" onclick="stopSession()">
+                ⏹ Stop & Save
+            </button>
+        </div>
+
+        <!-- Screen 4: Success -->
+        <div class="screen" id="screen-success">
+            <div class="success-icon">✓</div>
+            <h2 style="text-align: center;">Session Saved!</h2>
+            
+            <p style="text-align: center; margin: 20px 0;">
+                Transcript saved to Google Drive<br>
+                Email notification sent
+            </p>
+
+            <div class="file-info">
+                <strong>File:</strong> יוסי כהן_2025-12-01_14-30.txt<br>
+                <strong>Location:</strong> Clinic/Transcripts
+            </div>
+
+            <div class="button-group">
+                <button class="btn-secondary" onclick="showScreen('setup')">
+                    New Session
+                </button>
+                <button class="btn-primary" onclick="alert('Opens Google Drive link')">
+                    View in Drive
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function showScreen(screenName) {
+            // Hide all screens
+            document.querySelectorAll('.screen').forEach(screen => {
+                screen.classList.remove('active');
+            });
+
+            // Show selected screen
+            const screenMap = {
+                'login': 'screen-login',
+                'setup': 'screen-setup',
+                'recording': 'screen-recording',
+                'success': 'screen-success'
+            };
+
+            document.getElementById(screenMap[screenName]).classList.add('active');
+        }
+
+        function startSession() {
+            const patientName = document.getElementById('patient-name').value;
+            if (!patientName || patientName.trim() === '') {
+                alert('Please enter a patient name');
+                return;
+            }
+
+            document.getElementById('current-patient').textContent = patientName;
+            document.getElementById('session-time').textContent = new Date().toLocaleTimeString('he-IL', {hour: '2-digit', minute: '2-digit'});
+            
+            showScreen('recording');
+            
+            // Simulate transcription
+            simulateTranscription();
+        }
+
+        function stopSession() {
+            showScreen('success');
+        }
+
+        function simulateTranscription() {
+            const transcriptArea = document.getElementById('transcript');
+            transcriptArea.innerHTML = '';
+            
+            const sampleTranscripts = [
+                { speaker: 1, text: 'שלום, איך אתה מרגיש היום?' },
+                { speaker: 2, text: 'בסדר, תודה. קצת חרדתי אבל בסדר.' },
+                { speaker: 1, text: 'אוקיי, בוא נדבר על זה. מה גורם לך להרגיש חרדה?' },
+                { speaker: 2, text: 'אני לא בטוח, אבל זה קורה בעיקר כשאני צריך לדבר בפני אנשים.' }
+            ];
+
+            let index = 0;
+            const interval = setInterval(() => {
+                if (index >= sampleTranscripts.length) {
+                    clearInterval(interval);
+                    return;
+                }
+
+                const item = sampleTranscripts[index];
+                const speakerDiv = document.createElement('div');
+                speakerDiv.className = 'speaker-label';
+                speakerDiv.textContent = `Speaker ${item.speaker}:`;
+                
+                const textDiv = document.createElement('div');
+                textDiv.textContent = item.text;
+                textDiv.style.marginBottom = '15px';
+
+                transcriptArea.appendChild(speakerDiv);
+                transcriptArea.appendChild(textDiv);
+                transcriptArea.scrollTop = transcriptArea.scrollHeight;
+
+                index++;
+            }, 2000);
+        }
+    </script>
+</body>
+</html>
+
+
+
+

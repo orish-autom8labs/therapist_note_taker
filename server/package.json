@@ -1,0 +1,9 @@
+{
+  "name": "note-taker-server",
+  "version": "1.0.0",
+  "description": "Note: Backend is now Python. Use requirements.txt for dependencies. This file is kept for reference.",
+  "scripts": {
+    "note": "Backend is Python - use 'python run.py' or 'python -m uvicorn main:app --reload'"
+  }
+}
+
