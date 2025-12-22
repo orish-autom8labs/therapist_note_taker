@@ -35,12 +35,17 @@ export default function useSonioxClient({
   const [error, setError] = useState(null);
 
   const startTranscription = useCallback(async () => {
+    console.log('[DEBUG] startTranscription called');
+
     if (!sonioxClient.current) {
       const error = new Error('Soniox client not initialized');
+      console.error('[DEBUG] ERROR: Soniox client not initialized!');
       setError(error);
       if (onError) onError(error);
       return;
     }
+
+    console.log('[DEBUG] Resetting tokens and starting SDK');
 
     // Reset tokens (like official example)
     setFinalTokens([]);
@@ -48,6 +53,13 @@ export default function useSonioxClient({
     setError(null);
 
     try {
+      console.log('[DEBUG] Calling sonioxClient.start() with config:', {
+        model: 'stt-rt-v3',
+        enableLanguageIdentification: true,
+        enableSpeakerDiarization: enableSpeakerDiarization,
+        enableEndpointDetection: true,
+      });
+
       await sonioxClient.current.start({
         model: 'stt-rt-v3',
         enableLanguageIdentification: true, // Let Soniox detect language automatically
@@ -55,16 +67,19 @@ export default function useSonioxClient({
         enableEndpointDetection: true,
 
         onStarted: () => {
+          console.log('[DEBUG] SDK onStarted callback triggered');
           setState('Recording');
           if (onStarted) onStarted();
         },
 
         onFinished: () => {
+          console.log('[DEBUG] SDK onFinished callback triggered');
           setState('Finished');
           if (onFinished) onFinished();
         },
 
         onError: (status, message, errorCode) => {
+          console.error('[DEBUG] SDK onError callback:', { status, message, errorCode });
           const error = new Error(message || 'Transcription error');
           error.status = status;
           error.errorCode = errorCode;
