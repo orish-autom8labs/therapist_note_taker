@@ -1,16 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import useSonioxClient from '../hooks/useSonioxClient';
-import useSessionTimer from '../hooks/useSessionTimer';
-import useAudioVisualizer from '../hooks/useAudioVisualizer';
 import { syncTranscript, setupAutoSave } from '../services/transcriptSyncService';
 import { saveToLocalStorage } from '../services/recoveryService';
-import SessionTimer from './SessionTimer';
-import AudioVisualizer from './AudioVisualizer';
 
 function ActiveSession({ sessionData, user, onComplete, onStop }) {
   const [error, setError] = useState(null);
-  const [audioStream, setAudioStream] = useState(null);
-  const [warningNotification, setWarningNotification] = useState(null);
   const transcriptEndRef = useRef(null);
   const sessionIdRef = useRef(null);
   const autoSaveCleanupRef = useRef(null);
@@ -20,57 +14,7 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
     sessionIdRef.current = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }, []);
 
-  // Get microphone access for audio visualization
-  useEffect(() => {
-    async function getMicrophone() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        setAudioStream(stream);
-      } catch (err) {
-        console.error('[AUDIO] Failed to get microphone:', err);
-        // Don't show error - visualization is optional
-      }
-    }
-    getMicrophone();
-
-    return () => {
-      if (audioStream) {
-        audioStream.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Audio visualization
-  const { waveformData, isActive: isAudioActive } = useAudioVisualizer(audioStream);
-
-  // Session timer with 60-minute limit
-  const {
-    elapsed,
-    remaining,
-    warningLevel,
-    start: startTimer,
-    stop: stopTimer,
-    formatTime,
-  } = useSessionTimer({
-    maxDuration: 60 * 60 * 1000, // 60 minutes
-    onWarning: (level, minutesRemaining) => {
-      console.log(`[TIMER] Warning: ${level}, ${minutesRemaining} minutes remaining`);
-      if (level === 'warning') {
-        setWarningNotification(`⚠️ 15 minutes remaining`);
-      } else if (level === 'critical') {
-        setWarningNotification(`🔴 5 minutes remaining - session will auto-stop soon!`);
-      }
-    },
-    onMaxTime: () => {
-      console.log('[TIMER] Max time reached - auto-stopping session');
-      setWarningNotification('⏰ 60-minute limit reached - auto-stopping session');
-      setTimeout(() => {
-        stopSession();
-      }, 2000); // Give user 2 seconds to see the message
-    },
-  });
-
-  // Soniox SDK hook
+  // Soniox SDK hook - EXACTLY like official example
   const {
     state,
     finalTokens,
@@ -87,30 +31,35 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
       setError(err.message || 'Transcription error');
     },
     onStarted: () => {
-      console.log('[SESSION] Transcription started');
-      startTimer(); // Start timer when transcription starts
+      console.log('[DEBUG] Transcription started');
     },
     onFinished: () => {
-      console.log('[SESSION] Transcription finished');
-      stopTimer(); // Stop timer when transcription finishes
+      console.log('[DEBUG] Transcription finished');
     },
   });
 
   // Start session on mount
   useEffect(() => {
     startTranscription();
-
+    
     return () => {
+      // Cleanup on unmount
       stopTranscription();
-      stopTimer();
       if (autoSaveCleanupRef.current) {
         autoSaveCleanupRef.current();
       }
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Combine final and non-final tokens
+  // Combine final and non-final tokens (like official example)
   const allTokens = [...finalTokens, ...nonFinalTokens];
+  
+  // Debug logging
+  useEffect(() => {
+    console.log('[COMPONENT] finalTokens:', finalTokens);
+    console.log('[COMPONENT] nonFinalTokens:', nonFinalTokens);
+    console.log('[COMPONENT] allTokens:', allTokens);
+  }, [finalTokens, nonFinalTokens, allTokens]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -121,6 +70,7 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
   useEffect(() => {
     if (allTokens.length > 0) {
       const interval = setInterval(() => {
+        // Convert tokens to chunks for saving
         const transcriptChunks = allTokens.map(t => ({
           text: t.text,
           speaker: t.speaker,
@@ -141,13 +91,16 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
   // Setup auto-save to server (every 1 minute)
   useEffect(() => {
     if (allTokens.length > 0 && sessionIdRef.current && user?.accessToken) {
+      // Clear existing auto-save
       if (autoSaveCleanupRef.current) {
         autoSaveCleanupRef.current();
       }
 
+      // Setup new auto-save
       autoSaveCleanupRef.current = setupAutoSave(
         sessionIdRef.current,
         () => {
+          // Convert tokens to chunks for syncing
           return allTokens.map(t => ({
             text: t.text,
             speaker: t.speaker,
@@ -159,9 +112,10 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
           accessToken: user.accessToken,
           refreshToken: user.refreshToken,
         },
-        sessionData.patientName,
+        sessionData.patientName, // Pass patient name
         (error) => {
           console.error('[SYNC] Auto-save error:', error);
+          // Don't show error to user, just log it
         }
       );
 
@@ -182,22 +136,22 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
 
   const stopSession = async () => {
     try {
-      console.log('[SESSION] Stopping session...');
-
-      // Stop transcription and timer
+      console.log('[DEBUG] Stopping session...');
+      
+      // Stop transcription
       stopTranscription();
-      stopTimer();
 
       // Final save to server
       if (allTokens.length > 0 && sessionIdRef.current && user?.accessToken) {
         try {
+          // Convert tokens to chunks for syncing
           const transcriptChunks = allTokens.map(t => ({
             text: t.text,
             speaker: t.speaker,
             is_final: t.is_final,
             timestamp: t.timestamp || Date.now(),
           }));
-
+          
           const result = await syncTranscript(
             sessionIdRef.current,
             transcriptChunks,
@@ -206,12 +160,14 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
               accessToken: user.accessToken,
               refreshToken: user.refreshToken,
             },
-            sessionData.patientName
+            sessionData.patientName // Pass patient name
           );
 
-          console.log('[SESSION] Final save result:', result);
-
+          console.log('[DEBUG] Final save result:', result);
+          
+          // Call onComplete with file info
           if (result.fileInfo) {
+            // Map Python naming (web_view_link) to JS naming (webViewLink)
             const fileInfo = {
               id: result.fileInfo.id,
               name: result.fileInfo.name,
@@ -224,6 +180,7 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
         } catch (error) {
           console.error('[ERROR] Failed to save final transcript:', error);
           setError(`Failed to save: ${error.message}`);
+          // Still call onComplete to allow user to continue
           onComplete({ error: error.message });
         }
       } else {
@@ -235,6 +192,24 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
     }
   };
 
+  const formatTranscript = () => {
+    let output = '';
+    let currentSpeaker = null;
+
+    for (const token of allTokens) {
+      if (token.speaker && token.speaker !== currentSpeaker) {
+        if (currentSpeaker !== null) {
+          output += '\n\n';
+        }
+        output += `${token.speaker}:\n`;
+        currentSpeaker = token.speaker;
+      }
+      output += token.text + ' ';
+    }
+
+    return output.trim();
+  };
+
   return (
     <div className="container">
       <div className="header">
@@ -242,18 +217,6 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
         <h2>Note Taker</h2>
       </div>
 
-      {/* Session Timer */}
-      <SessionTimer
-        elapsed={elapsed}
-        remaining={remaining}
-        warningLevel={warningLevel}
-        formatTime={formatTime}
-      />
-
-      {/* Audio Visualizer */}
-      <AudioVisualizer waveformData={waveformData} isActive={isAudioActive && isRecording} />
-
-      {/* Recording Indicator */}
       {isRecording && (
         <div style={{
           display: 'flex',
@@ -274,7 +237,6 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
         </div>
       )}
 
-      {/* Session Info */}
       <div style={{
         background: '#ECF0F1',
         padding: '15px',
@@ -291,7 +253,6 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
         <strong>Status:</strong> {state}
       </div>
 
-      {/* Error Display */}
       {error && (
         <div style={{
           background: '#FADBD8',
@@ -304,7 +265,6 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
         </div>
       )}
 
-      {/* Transcript Display */}
       <div style={{
         background: '#F8F9FA',
         border: '2px solid #E9ECEF',
@@ -323,20 +283,23 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
       }}>
         {allTokens.length === 0 ? (
           <div style={{ color: '#95A5A6', textAlign: 'center', padding: '40px' }}>
-            Waiting for speech...
+            Waiting for speech... (Debug: finalTokens={finalTokens.length}, nonFinalTokens={nonFinalTokens.length})
           </div>
         ) : (
           <div>
             {allTokens.map((token, idx) => {
+              // Skip <end> tokens (they're just markers)
               if (token.text === '<end>') {
                 return null;
               }
-
+              
+              // Track speaker changes to show speaker labels only when speaker changes
               const prevToken = idx > 0 ? allTokens[idx - 1] : null;
               const isNewSpeaker = token.speaker && token.speaker !== (prevToken?.speaker || null);
-
+              
               return (
-                <React.Fragment key={`token-${idx}`}>
+                <React.Fragment key={`rendered-token-${idx}`}>
+                  {/* Show speaker label if speaker changed or new speaker joined */}
                   {isNewSpeaker && token.speaker && (
                     <div
                       style={{
@@ -350,6 +313,7 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
                       {token.speaker}:
                     </div>
                   )}
+                  {/* Display final and non-final tokens with different colors */}
                   <span
                     style={{
                       color: token.is_final ? '#2C3E50' : '#7F8C8D',
@@ -359,6 +323,12 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
                   >
                     {token.text}
                   </span>
+                  {/* Add updating indicator for non-final tokens */}
+                  {!token.is_final && (
+                    <span style={{ fontSize: '12px', color: '#95A5A6' }}>
+                      {' '}(updating...)
+                    </span>
+                  )}
                 </React.Fragment>
               );
             })}
