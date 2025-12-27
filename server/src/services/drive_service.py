@@ -20,6 +20,7 @@ class DriveService:
         self.redirect_uri = config.drive.redirect_uri
         self.oauth2_client = None
         self.drive_service = None
+        self._last_refreshed_tokens = None
     
     def get_auth_url(self) -> str:
         """
@@ -88,7 +89,7 @@ class DriveService:
     def set_user_tokens(self, tokens: dict):
         """
         Set user's access token.
-        
+
         Args:
             tokens: Access and refresh tokens dictionary
         """
@@ -100,9 +101,44 @@ class DriveService:
             client_secret=tokens.get('client_secret') or self.client_secret,
             scopes=tokens.get('scopes', ['https://www.googleapis.com/auth/drive.file']),
         )
-        
+
         self.oauth2_client = credentials
         self.drive_service = build('drive', 'v3', credentials=credentials)
+
+    def _refresh_token_if_needed(self):
+        """
+        Refresh access token if expired.
+        Returns updated tokens if refreshed, None otherwise.
+        """
+        if self.oauth2_client and self.oauth2_client.expired and self.oauth2_client.refresh_token:
+            print('[DRIVE] Access token expired, refreshing...')
+            try:
+                from google.auth.transport.requests import Request
+                self.oauth2_client.refresh(Request())
+                print('[DRIVE] Token refreshed successfully')
+
+                # Rebuild drive service with refreshed credentials
+                self.drive_service = build('drive', 'v3', credentials=self.oauth2_client)
+                print('[DRIVE] Drive service rebuilt with refreshed credentials')
+
+                # Return new tokens
+                return {
+                    'access_token': self.oauth2_client.token,
+                    'refresh_token': self.oauth2_client.refresh_token,
+                }
+            except Exception as e:
+                print(f'[DRIVE] Failed to refresh token: {e}')
+                raise
+        return None
+
+    def get_and_clear_refreshed_tokens(self):
+        """
+        Get and clear the last refreshed tokens (from retry logic).
+        Returns None if no tokens were refreshed since last call.
+        """
+        tokens = self._last_refreshed_tokens
+        self._last_refreshed_tokens = None
+        return tokens
     
     async def save_transcript(
         self,
@@ -112,87 +148,145 @@ class DriveService:
     ) -> dict:
         """
         Save transcript to Google Drive.
-        
+
         Args:
             content: Transcript content
             file_name: File name
             folder_path: Folder path (e.g., 'Clinic/Transcripts')
-        
+
         Returns:
             File info with webViewLink
         """
         if not self.drive_service:
             raise ValueError("User tokens not set. Call set_user_tokens() first.")
-        
-        # Find or create folder
-        folder_id = await self.find_or_create_folder(folder_path)
-        
-        # Create file metadata
-        file_metadata = {
-            'name': file_name,
-            'parents': [folder_id],
-        }
-        
+
         from io import BytesIO
         from googleapiclient.http import MediaIoBaseUpload
-        
-        media = MediaIoBaseUpload(
-            BytesIO(content.encode('utf-8')),
-            mimetype='text/plain',
-            resumable=True
-        )
-        
-        file = self.drive_service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields='id, name, webViewLink, webContentLink'
-        ).execute()
-        
-        return {
-            'file_id': file.get('id'),
-            'file_name': file.get('name'),
-            'web_view_link': file.get('webViewLink'),
-            'web_content_link': file.get('webContentLink'),
-        }
+        from googleapiclient.errors import HttpError
+
+        # Try operation, refresh token if needed, and retry once
+        max_retries = 1
+        for attempt in range(max_retries + 1):
+            try:
+                # Find or create folder
+                folder_id = await self.find_or_create_folder(folder_path)
+
+                # Create file metadata
+                file_metadata = {
+                    'name': file_name,
+                    'parents': [folder_id],
+                }
+
+                media = MediaIoBaseUpload(
+                    BytesIO(content.encode('utf-8')),
+                    mimetype='text/plain',
+                    resumable=True
+                )
+
+                file = self.drive_service.files().create(
+                    body=file_metadata,
+                    media_body=media,
+                    fields='id, name, webViewLink, webContentLink'
+                ).execute()
+
+                return {
+                    'file_id': file.get('id'),
+                    'file_name': file.get('name'),
+                    'web_view_link': file.get('webViewLink'),
+                    'web_content_link': file.get('webContentLink'),
+                }
+
+            except HttpError as e:
+                if e.resp.status == 401 and attempt < max_retries:
+                    # Unauthorized - try refreshing token
+                    print(f'[DRIVE] Got 401 error, attempting token refresh (attempt {attempt + 1}/{max_retries + 1})')
+                    try:
+                        from google.auth.transport.requests import Request
+                        self.oauth2_client.refresh(Request())
+                        self.drive_service = build('drive', 'v3', credentials=self.oauth2_client)
+                        print('[DRIVE] Token refreshed successfully, retrying operation...')
+
+                        # Store refreshed tokens to return to caller
+                        self._last_refreshed_tokens = {
+                            'access_token': self.oauth2_client.token,
+                            'refresh_token': self.oauth2_client.refresh_token,
+                        }
+                        continue
+                    except Exception as refresh_error:
+                        print(f'[DRIVE] Token refresh failed: {refresh_error}')
+                        # If refresh fails, user needs to re-authenticate
+                        raise ValueError(f"OAuth tokens expired. Please log in again. Error: {refresh_error}")
+                else:
+                    # Other error or max retries reached
+                    raise
     
     async def update_file(self, file_id: str, content: str) -> dict:
         """
         Update existing file (for auto-save).
-        
+
         Args:
             file_id: Google Drive file ID
             content: New content
-        
+
         Returns:
             Updated file info
         """
         if not self.drive_service:
             raise ValueError("User tokens not set. Call set_user_tokens() first.")
-        
+
         from io import BytesIO
         from googleapiclient.http import MediaIoBaseUpload
-        
-        media = MediaIoBaseUpload(
-            BytesIO(content.encode('utf-8')),
-            mimetype='text/plain',
-            resumable=True
-        )
-        
-        self.drive_service.files().update(
-            fileId=file_id,
-            media_body=media
-        ).execute()
-        
-        file = self.drive_service.files().get(
-            fileId=file_id,
-            fields='id, name, webViewLink'
-        ).execute()
-        
-        return {
-            'file_id': file.get('id'),
-            'file_name': file.get('name'),
-            'web_view_link': file.get('webViewLink'),
-        }
+        from googleapiclient.errors import HttpError
+
+        # Try operation, refresh token if needed, and retry once
+        max_retries = 1
+        for attempt in range(max_retries + 1):
+            try:
+                media = MediaIoBaseUpload(
+                    BytesIO(content.encode('utf-8')),
+                    mimetype='text/plain',
+                    resumable=True
+                )
+
+                self.drive_service.files().update(
+                    fileId=file_id,
+                    media_body=media
+                ).execute()
+
+                file = self.drive_service.files().get(
+                    fileId=file_id,
+                    fields='id, name, webViewLink'
+                ).execute()
+
+                return {
+                    'file_id': file.get('id'),
+                    'file_name': file.get('name'),
+                    'web_view_link': file.get('webViewLink'),
+                }
+
+            except HttpError as e:
+                if e.resp.status == 401 and attempt < max_retries:
+                    # Unauthorized - try refreshing token
+                    print(f'[DRIVE] Got 401 error during update, attempting token refresh (attempt {attempt + 1}/{max_retries + 1})')
+                    try:
+                        from google.auth.transport.requests import Request
+                        self.oauth2_client.refresh(Request())
+                        self.drive_service = build('drive', 'v3', credentials=self.oauth2_client)
+                        print('[DRIVE] Token refreshed successfully, retrying operation...')
+
+                        # Store refreshed tokens to return to caller
+                        self._last_refreshed_tokens = {
+                            'access_token': self.oauth2_client.token,
+                            'refresh_token': self.oauth2_client.refresh_token,
+                        }
+                        continue
+                    except Exception as refresh_error:
+                        print(f'[DRIVE] Token refresh failed: {refresh_error}')
+                        # If refresh fails, user needs to re-authenticate
+                        raise ValueError(f"OAuth tokens expired. Please log in again. Error: {refresh_error}")
+                else:
+                    # Other error or max retries reached
+                    raise
     
     async def delete_file(self, file_id: str):
         """

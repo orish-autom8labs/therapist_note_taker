@@ -138,12 +138,18 @@ async def save_transcript(
     """
     try:
         # Set user tokens if provided
+        refreshed_tokens = None
         if transcript_update.accessToken and transcript_update.refreshToken:
             drive_service.set_user_tokens({
                 'access_token': transcript_update.accessToken,
                 'refresh_token': transcript_update.refreshToken,
             })
-        
+
+            # Check if token needs refresh (and refresh if needed)
+            refreshed_tokens = drive_service._refresh_token_if_needed()
+            if refreshed_tokens:
+                print('[SERVER] Tokens refreshed, will return new tokens to client')
+
         # Get session info
         if session_id not in active_sessions:
             # Create new session entry
@@ -222,8 +228,8 @@ async def save_transcript(
 
                 # Clean up session
                 del active_sessions[session_id]
-                
-                return {
+
+                response = {
                     "status": "success",
                     "fileInfo": {
                         "id": file_info.get('file_id'),
@@ -231,6 +237,18 @@ async def save_transcript(
                         "web_view_link": file_info.get('web_view_link'),
                     },
                 }
+
+                # Include refreshed tokens if they were updated (either proactively or during retry)
+                if refreshed_tokens:
+                    response["refreshedTokens"] = refreshed_tokens
+                else:
+                    # Check if tokens were refreshed during the Drive operation
+                    retry_refreshed_tokens = drive_service.get_and_clear_refreshed_tokens()
+                    if retry_refreshed_tokens:
+                        print('[SERVER] Tokens were refreshed during Drive operation, returning to client')
+                        response["refreshedTokens"] = retry_refreshed_tokens
+
+                return response
             except Exception as e:
                 print(f"[ERROR] Failed to save transcript: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
@@ -253,8 +271,8 @@ async def save_transcript(
                         'Clinic/Transcripts'
                     )
                     session['drive_file_id'] = file_info.get('file_id')
-                
-                return {
+
+                response = {
                     "status": "success",
                     "fileInfo": {
                         "id": file_info.get('file_id'),
@@ -262,6 +280,18 @@ async def save_transcript(
                         "web_view_link": file_info.get('web_view_link'),
                     },
                 }
+
+                # Include refreshed tokens if they were updated (either proactively or during retry)
+                if refreshed_tokens:
+                    response["refreshedTokens"] = refreshed_tokens
+                else:
+                    # Check if tokens were refreshed during the Drive operation
+                    retry_refreshed_tokens = drive_service.get_and_clear_refreshed_tokens()
+                    if retry_refreshed_tokens:
+                        print('[SERVER] Tokens were refreshed during Drive operation (auto-save), returning to client')
+                        response["refreshedTokens"] = retry_refreshed_tokens
+
+                return response
             except Exception as e:
                 print(f"[ERROR] Failed to auto-save transcript: {e}")
                 # Don't fail the request, just log the error

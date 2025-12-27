@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import sessionConfig from '../config/sessionConfig';
 
 /**
  * Hook for managing session time with warnings and auto-stop.
@@ -22,9 +23,9 @@ export default function useSessionTimer({
   const intervalCounterRef = useRef(0); // Track how many intervals created
   const cleanupCounterRef = useRef(0); // Track how many times cleanup runs
 
-  // Warning thresholds
-  const warningTime = 45 * 60 * 1000; // 45 minutes
-  const criticalTime = 55 * 60 * 1000; // 55 minutes
+  // Warning thresholds from config
+  const warningTime = maxDuration * sessionConfig.warningThreshold;
+  const criticalTime = maxDuration * sessionConfig.criticalThreshold;
 
   // Start timer
   const start = useCallback(() => {

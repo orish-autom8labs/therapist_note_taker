@@ -65,6 +65,15 @@ function App() {
     setScreen('setup');
   };
 
+  const handleLogout = () => {
+    // Clear tokens from localStorage
+    localStorage.removeItem('user_tokens');
+    // Clear user state
+    setUser(null);
+    // Go to login screen
+    setScreen('login');
+  };
+
   const handleStartSession = (sessionInfo) => {
     setSessionData(sessionInfo);
     setScreen('recording');
@@ -73,6 +82,19 @@ function App() {
   const handleSessionComplete = (fileInfo) => {
     setSessionData({ ...sessionData, fileInfo });
     setScreen('success');
+  };
+
+  // Handle token refresh from server
+  const handleTokenRefresh = (newTokens) => {
+    console.log('[APP] Updating user tokens after refresh');
+    const updatedUser = {
+      ...user,
+      accessToken: newTokens.access_token,
+      refreshToken: newTokens.refresh_token,
+    };
+    setUser(updatedUser);
+    // Persist to localStorage
+    localStorage.setItem('user_tokens', JSON.stringify(updatedUser));
   };
 
   const handleRecovery = (recoveredData) => {
@@ -105,7 +127,7 @@ function App() {
         <SessionSetup
           user={user}
           onStart={handleStartSession}
-          onBack={() => setScreen('login')}
+          onBack={handleLogout}
         />
       )}
       {screen === 'recording' && (
@@ -114,6 +136,7 @@ function App() {
           user={user}
           onComplete={handleSessionComplete}
           onStop={() => setScreen('setup')}
+          onTokenRefresh={handleTokenRefresh}
         />
       )}
       {screen === 'success' && (

@@ -18,7 +18,7 @@ function SessionSetup({ user, onStart, onBack }) {
   return (
     <div className="container">
       <div className="header">
-        <a className="back-link" onClick={onBack}>← Back</a>
+        <a className="back-link" onClick={onBack}>← Logout</a>
         <h2>Note Taker</h2>
       </div>
 

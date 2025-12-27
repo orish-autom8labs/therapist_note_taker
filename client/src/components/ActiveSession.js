@@ -6,13 +6,15 @@ import { syncTranscript, setupAutoSave } from '../services/transcriptSyncService
 import { saveToLocalStorage } from '../services/recoveryService';
 import SessionTimer from './SessionTimer';
 import AudioVisualizer from './AudioVisualizer';
+import sessionConfig from '../config/sessionConfig';
 
-function ActiveSession({ sessionData, user, onComplete, onStop }) {
+function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }) {
   const [error, setError] = useState(null);
   const [audioStream, setAudioStream] = useState(null);
   const transcriptEndRef = useRef(null);
   const sessionIdRef = useRef(null);
   const autoSaveCleanupRef = useRef(null);
+  const stopSessionRef = useRef(null);
 
   // Generate session ID
   useEffect(() => {
@@ -50,11 +52,13 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
   const handleMaxTime = useCallback(() => {
     console.log('[SESSION] ⏱️ Max time callback created/called - auto-stopping session');
     setTimeout(() => {
-      stopSession();
+      if (stopSessionRef.current) {
+        stopSessionRef.current();
+      }
     }, 2000); // Give user 2 seconds to see the message
   }, []); // No dependencies - callback never changes
 
-  // Session timer with 60-minute limit
+  // Session timer with configurable duration
   const {
     elapsed,
     remaining,
@@ -63,7 +67,7 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
     stop: stopTimer,
     formatTime,
   } = useSessionTimer({
-    maxDuration: 60 * 60 * 1000, // 60 minutes
+    maxDuration: sessionConfig.maxDuration,
     onWarning: handleTimerWarning,
     onMaxTime: handleMaxTime,
   });
@@ -165,7 +169,8 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
         sessionData.patientName,
         (error) => {
           console.error('[SYNC] Auto-save error:', error);
-        }
+        },
+        onTokenRefresh // Pass token refresh callback
       );
 
       return () => {
@@ -186,6 +191,9 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
   const stopSession = async () => {
     try {
       console.log('[SESSION] Stopping session...');
+      console.log('[SESSION] allTokens.length:', allTokens.length);
+      console.log('[SESSION] sessionIdRef.current:', sessionIdRef.current);
+      console.log('[SESSION] user?.accessToken:', user?.accessToken ? 'present' : 'missing');
 
       // Stop transcription and timer
       stopTranscription();
@@ -214,6 +222,12 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
 
           console.log('[SESSION] Final save result:', result);
 
+          // Handle refreshed tokens
+          if (result.refreshedTokens && onTokenRefresh) {
+            console.log('[SESSION] Tokens were refreshed during final save, updating...');
+            onTokenRefresh(result.refreshedTokens);
+          }
+
           if (result.fileInfo) {
             const fileInfo = {
               id: result.fileInfo.id,
@@ -237,6 +251,9 @@ function ActiveSession({ sessionData, user, onComplete, onStop }) {
       setError(error.message);
     }
   };
+
+  // Store stopSession in ref so it can be called from handleMaxTime
+  stopSessionRef.current = stopSession;
 
   return (
     <div className="container">

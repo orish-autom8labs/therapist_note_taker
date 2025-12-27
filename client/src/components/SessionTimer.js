@@ -1,4 +1,5 @@
 import React from 'react';
+import sessionConfig from '../config/sessionConfig';
 
 /**
  * Session Timer Display Component
@@ -10,7 +11,7 @@ import React from 'react';
  * @param {Function} formatTime - Function to format time as MM:SS
  */
 function SessionTimer({ elapsed, remaining, warningLevel, formatTime }) {
-  const maxDuration = 60 * 60 * 1000; // 60 minutes
+  const maxDuration = sessionConfig.maxDuration;
   const percentage = (elapsed / maxDuration) * 100;
 
   // Colors based on warning level
@@ -93,7 +94,7 @@ function SessionTimer({ elapsed, remaining, warningLevel, formatTime }) {
         >
           <span style={{ fontSize: '18px' }}>⚠️</span>
           <span style={{ fontWeight: '500' }}>
-            15 minutes remaining - prepare to wrap up
+            {formatTime(remaining)} remaining - prepare to wrap up
           </span>
         </div>
       )}
@@ -114,7 +115,7 @@ function SessionTimer({ elapsed, remaining, warningLevel, formatTime }) {
         >
           <span style={{ fontSize: '18px' }}>🔴</span>
           <span style={{ fontWeight: '600' }}>
-            5 minutes remaining - session will auto-stop soon!
+            {formatTime(remaining)} remaining - session will auto-stop soon!
           </span>
         </div>
       )}
