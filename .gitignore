@@ -6,10 +6,12 @@ client/node_modules/
 # Environment variables
 .env
 server/.env
+server/.env.yaml
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+*.env.yaml
 
 # Build outputs
 client/build/
