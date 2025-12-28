@@ -21,7 +21,11 @@ app = FastAPI(title="Note Taker API")
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "https://note-taker-frontend-1049928242674.us-central1.run.app"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -29,8 +33,20 @@ app.add_middleware(
 
 # Services
 transcription_service = TranscriptionService()
-drive_service = DriveService()
 email_service = EmailService()
+
+# Helper function to create DriveService with user tokens
+def create_drive_service_with_tokens(access_token: str, refresh_token: str) -> DriveService:
+    """
+    Create a new DriveService instance with user tokens.
+    This ensures each user has their own isolated service instance.
+    """
+    service = DriveService()
+    service.set_user_tokens({
+        'access_token': access_token,
+        'refresh_token': refresh_token,
+    })
+    return service
 
 # Store active sessions
 active_sessions: Dict[str, Dict[str, Any]] = {}
@@ -137,13 +153,14 @@ async def save_transcript(
     Called periodically (every 1 minute) for auto-save and on session end for final save.
     """
     try:
-        # Set user tokens if provided
+        # Create user-specific DriveService instance if tokens provided
+        drive_service = None
         refreshed_tokens = None
         if transcript_update.accessToken and transcript_update.refreshToken:
-            drive_service.set_user_tokens({
-                'access_token': transcript_update.accessToken,
-                'refresh_token': transcript_update.refreshToken,
-            })
+            drive_service = create_drive_service_with_tokens(
+                transcript_update.accessToken,
+                transcript_update.refreshToken
+            )
 
             # Check if token needs refresh (and refresh if needed)
             refreshed_tokens = drive_service._refresh_token_if_needed()
@@ -361,11 +378,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     }))
                     continue
                 
-                # Set user's Drive tokens
-                drive_service.set_user_tokens({
-                    'access_token': access_token,
-                    'refresh_token': refresh_token,
-                })
+                # Create user-specific DriveService instance
+                user_drive_service = create_drive_service_with_tokens(access_token, refresh_token)
                 
                 # Generate file name
                 from datetime import datetime
@@ -433,11 +447,11 @@ async def websocket_endpoint(websocket: WebSocket):
                             try:
                                 content = format_transcript(transcript_buffer)
                                 temp_file_name = f"{config.autosave.temp_file_prefix}{file_name}"
-                                
+
                                 if drive_file_id:
-                                    await drive_service.update_file(drive_file_id, content)
+                                    await user_drive_service.update_file(drive_file_id, content)
                                 else:
-                                    file_info = await drive_service.save_transcript(
+                                    file_info = await user_drive_service.save_transcript(
                                         content,
                                         temp_file_name,
                                         'Clinic/Transcripts'
@@ -448,7 +462,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 auto_save_task = asyncio.create_task(auto_save_loop())
                 
-                # Store session
+                # Store session with user's DriveService
                 active_sessions[session_id] = {
                     'websocket': websocket,
                     'transcription_session': transcription_session,
@@ -457,6 +471,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     'patient_name': patient_name,
                     'file_name': file_name,
                     'start_time': datetime.now(),
+                    'drive_service': user_drive_service,  # Store user-specific drive service
+                    'access_token': access_token,
+                    'refresh_token': refresh_token,
                 }
                 
                 await websocket.send_text(json.dumps({
@@ -524,18 +541,23 @@ async def websocket_endpoint(websocket: WebSocket):
                     content = format_transcript(transcript_buffer)
                     session = active_sessions.get(session_id)
                     final_file_name = session['file_name'] if session else f"session_{session_id}.txt"
-                    
+
+                    # Get user's drive service from session
+                    session_drive_service = session.get('drive_service') if session else None
+                    if not session_drive_service:
+                        raise ValueError("No drive service found for session")
+
                     if drive_file_id:
                         # Create new file with final name
-                        file_info = await drive_service.save_transcript(
+                        file_info = await session_drive_service.save_transcript(
                             content,
                             final_file_name,
                             'Clinic/Transcripts'
                         )
                         # Delete temp file
-                        await drive_service.delete_file(drive_file_id)
+                        await session_drive_service.delete_file(drive_file_id)
                     else:
-                        file_info = await drive_service.save_transcript(
+                        file_info = await session_drive_service.save_transcript(
                             content,
                             final_file_name,
                             'Clinic/Transcripts'
@@ -605,7 +627,8 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.get("/api/auth/google/url")
 async def get_google_auth_url():
     """Get Google OAuth URL."""
-    auth_url = drive_service.get_auth_url()
+    service = DriveService()  # Temporary instance just for OAuth flow
+    auth_url = service.get_auth_url()
     return {"authUrl": auth_url}
 
 
@@ -614,8 +637,9 @@ async def google_oauth_callback(code: str):
     """OAuth callback endpoint."""
     import os
     try:
-        tokens = await drive_service.get_tokens(code)
-        
+        service = DriveService()  # Temporary instance just for OAuth flow
+        tokens = await service.get_tokens(code)
+
         # Redirect to frontend with tokens
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
         redirect_url = (
@@ -623,8 +647,16 @@ async def google_oauth_callback(code: str):
             f"access_token={tokens['access_token']}&"
             f"refresh_token={tokens.get('refresh_token', '')}"
         )
-        
-        return RedirectResponse(url=redirect_url)
+
+        print(f'[OAuth] FRONTEND_URL env var: {os.getenv("FRONTEND_URL")}')
+        print(f'[OAuth] frontend_url variable: {frontend_url}')
+        print(f'[OAuth] Full redirect_url: {redirect_url}')
+        print(f'[OAuth] redirect_url starts with http: {redirect_url.startswith("http")}')
+
+        # Use 302 status code for better browser compatibility with absolute URLs
+        response = RedirectResponse(url=redirect_url, status_code=302)
+        print(f'[OAuth] Response headers: {response.headers}')
+        return response
     except Exception as e:
         print(f'OAuth callback error: {e}')
         raise HTTPException(status_code=500, detail="Authentication failed")
@@ -654,10 +686,15 @@ async def get_provider_info():
 
 
 @app.post("/api/admin/cleanup-temp-files")
-async def cleanup_temp_files():
-    """Cleanup temp files (can be called by cron job)."""
+async def cleanup_temp_files(access_token: str, refresh_token: str):
+    """
+    Cleanup temp files (requires admin user tokens).
+    TODO: Implement proper admin authentication.
+    """
     try:
-        count = await drive_service.cleanup_temp_files(
+        # Create drive service with provided admin tokens
+        admin_drive_service = create_drive_service_with_tokens(access_token, refresh_token)
+        count = await admin_drive_service.cleanup_temp_files(
             'Clinic/Transcripts',
             config.autosave.temp_file_retention_hours
         )

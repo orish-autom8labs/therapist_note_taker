@@ -273,7 +273,7 @@ function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }
       {/* Audio Visualizer */}
       <AudioVisualizer waveformData={waveformData} isActive={isAudioActive && isRecording} />
 
-      {/* Recording Indicator */}
+      {/* Transcribing Indicator */}
       {isRecording && (
         <div style={{
           display: 'flex',
@@ -290,7 +290,7 @@ function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }
             borderRadius: '50%',
             animation: 'pulse 2s infinite'
           }}></div>
-          <span>Recording...</span>
+          <span>Transcribing...</span>
         </div>
       )}
 

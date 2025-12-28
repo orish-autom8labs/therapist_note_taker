@@ -1,0 +1,32 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--build-arg'
+      - 'REACT_APP_API_URL=https://note-taker-backend-1049928242674.us-central1.run.app'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/note-taker-frontend:$BUILD_ID'
+      - '.'
+
+  # Push the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/note-taker-frontend:$BUILD_ID']
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'note-taker-frontend'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/note-taker-frontend:$BUILD_ID'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+
+images:
+  - 'gcr.io/$PROJECT_ID/note-taker-frontend:$BUILD_ID'
