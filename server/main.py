@@ -360,9 +360,21 @@ def format_transcript(buffer: list) -> str:
     return output.strip()
 
 
-def format_transcript_with_header(buffer: list, patient_name: str, start_time, end_time=None) -> str:
+def format_transcript_with_header(buffer: list, patient_name: str, start_time=None, end_time=None) -> str:
     """Format transcript with professional header including patient name, date, and duration."""
     from datetime import datetime
+
+    # Calculate start/end from token timestamps (most accurate)
+    if buffer:
+        token_timestamps = [chunk.get('timestamp') for chunk in buffer if chunk.get('timestamp')]
+        if token_timestamps:
+            # Use token timestamps as source of truth for duration
+            start_time = min(token_timestamps)
+            end_time = max(token_timestamps)
+
+    # Fallback: if still no start_time, use current time (shouldn't happen)
+    if start_time is None:
+        start_time = datetime.now().timestamp() * 1000
 
     # Ensure start_time is datetime object
     if isinstance(start_time, (int, float)):
