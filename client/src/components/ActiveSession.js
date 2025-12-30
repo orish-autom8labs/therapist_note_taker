@@ -347,41 +347,57 @@ function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }
           </div>
         ) : (
           <div>
-            {allTokens.map((token, idx) => {
-              if (token.text === '<end>') {
-                return null;
+            {(() => {
+              // Create speaker number to letter mapping (1 -> A, 2 -> B, etc.)
+              const speakerMap = {};
+              let nextLetter = 'A';
+
+              for (const token of allTokens) {
+                if (token.speaker && !speakerMap[token.speaker]) {
+                  speakerMap[token.speaker] = nextLetter;
+                  nextLetter = String.fromCharCode(nextLetter.charCodeAt(0) + 1);
+                }
               }
 
-              const prevToken = idx > 0 ? allTokens[idx - 1] : null;
-              const isNewSpeaker = token.speaker && token.speaker !== (prevToken?.speaker || null);
+              return allTokens.map((token, idx) => {
+                if (token.text === '<end>') {
+                  return null;
+                }
 
-              return (
-                <React.Fragment key={`token-${idx}`}>
-                  {isNewSpeaker && token.speaker && (
-                    <div
+                const prevToken = idx > 0 ? allTokens[idx - 1] : null;
+                const isNewSpeaker = token.speaker && token.speaker !== (prevToken?.speaker || null);
+
+                // Get speaker letter (A, B, C, etc.)
+                const speakerLetter = token.speaker ? speakerMap[token.speaker] : null;
+
+                return (
+                  <React.Fragment key={`token-${idx}`}>
+                    {isNewSpeaker && speakerLetter && (
+                      <div
+                        style={{
+                          color: '#4A90E2',
+                          fontWeight: '600',
+                          marginTop: idx > 0 ? '15px' : '0',
+                          marginBottom: '5px',
+                          fontSize: '14px'
+                        }}
+                      >
+                        Speaker {speakerLetter}:
+                      </div>
+                    )}
+                    <span
                       style={{
-                        color: '#4A90E2',
-                        fontWeight: '600',
-                        marginTop: idx > 0 ? '15px' : '0',
-                        marginBottom: '5px',
-                        fontSize: '14px'
+                        color: token.is_final ? '#2C3E50' : '#7F8C8D',
+                        fontStyle: token.is_final ? 'normal' : 'italic',
+                        whiteSpace: 'pre-wrap'
                       }}
                     >
-                      {token.speaker}:
-                    </div>
-                  )}
-                  <span
-                    style={{
-                      color: token.is_final ? '#2C3E50' : '#7F8C8D',
-                      fontStyle: token.is_final ? 'normal' : 'italic',
-                      whiteSpace: 'pre-wrap'
-                    }}
-                  >
-                    {token.text}
-                  </span>
-                </React.Fragment>
-              );
-            })}
+                      {token.text}
+                    </span>
+                  </React.Fragment>
+                );
+              });
+            })()}
           </div>
         )}
         <div ref={transcriptEndRef} />

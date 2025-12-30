@@ -99,9 +99,14 @@ export default function useSonioxClient({
           const newNonFinalTokens = [];
 
           for (const token of result.tokens) {
+            // Filter out special tokens like <end>
+            if (token.text === '<end>' || token.text === '</s>' || token.text === '<s>' || token.text === '<unk>') {
+              continue; // Skip these tokens entirely
+            }
+
             const tokenObj = {
               text: token.text || '',
-              speaker: token.speaker_label ? `Speaker ${token.speaker_label}` : null,
+              speaker: token.speaker || null, // Pass raw speaker number (1, 2, etc), not "Speaker 1"
               is_final: token.is_final || false,
               timestamp: Date.now(),
             };
