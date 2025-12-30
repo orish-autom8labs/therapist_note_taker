@@ -144,15 +144,17 @@ class DriveService:
         self,
         content: str,
         file_name: str,
-        folder_path: str = 'Clinic/Transcripts'
+        folder_path: str = 'Clinic/Transcripts',
+        as_google_doc: bool = True
     ) -> dict:
         """
         Save transcript to Google Drive.
 
         Args:
             content: Transcript content
-            file_name: File name
+            file_name: File name (with or without .txt extension)
             folder_path: Folder path (e.g., 'Clinic/Transcripts')
+            as_google_doc: If True, saves as Google Doc; if False, saves as .txt
 
         Returns:
             File info with webViewLink
@@ -171,17 +173,31 @@ class DriveService:
                 # Find or create folder
                 folder_id = await self.find_or_create_folder(folder_path)
 
-                # Create file metadata
-                file_metadata = {
-                    'name': file_name,
-                    'parents': [folder_id],
-                }
-
-                media = MediaIoBaseUpload(
-                    BytesIO(content.encode('utf-8')),
-                    mimetype='text/plain',
-                    resumable=True
-                )
+                # Create file metadata and media based on format
+                if as_google_doc:
+                    # Save as Google Doc (opens in Google Docs editor)
+                    file_metadata = {
+                        'name': file_name.replace('.txt', ''),  # Remove .txt extension for Google Docs
+                        'parents': [folder_id],
+                        'mimeType': 'application/vnd.google-apps.document'  # Google Docs format
+                    }
+                    # Upload plain text, Google auto-converts to Doc format
+                    media = MediaIoBaseUpload(
+                        BytesIO(content.encode('utf-8')),
+                        mimetype='text/plain',
+                        resumable=True
+                    )
+                else:
+                    # Save as plain text file
+                    file_metadata = {
+                        'name': file_name,
+                        'parents': [folder_id],
+                    }
+                    media = MediaIoBaseUpload(
+                        BytesIO(content.encode('utf-8')),
+                        mimetype='text/plain',
+                        resumable=True
+                    )
 
                 file = self.drive_service.files().create(
                     body=file_metadata,

@@ -222,7 +222,7 @@ async def save_transcript(
                     file_info = await drive_service.save_transcript(
                         transcript_text,
                         file_name,
-                        'Clinic/Transcripts'
+                        f'Clinic/Transcripts/{patient_name}'
                     )
                     # Delete old temp file
                     try:
@@ -234,7 +234,7 @@ async def save_transcript(
                     file_info = await drive_service.save_transcript(
                         transcript_text,
                         file_name,
-                        'Clinic/Transcripts'
+                        f'Clinic/Transcripts/{patient_name}'
                     )
                 
                 # Send email notification (optional - don't fail if email fails)
@@ -291,7 +291,7 @@ async def save_transcript(
                     file_info = await drive_service.save_transcript(
                         transcript_text,
                         temp_file_name,
-                        'Clinic/Transcripts'
+                        f'Clinic/Transcripts/{patient_name}'
                     )
                     session['drive_file_id'] = file_info.get('file_id')
 
@@ -529,7 +529,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                     file_info = await user_drive_service.save_transcript(
                                         content,
                                         temp_file_name,
-                                        'Clinic/Transcripts'
+                                        f'Clinic/Transcripts/{patient_name}'
                                     )
                                     drive_file_id = file_info['file_id']
                             except Exception as e:
@@ -635,7 +635,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         file_info = await session_drive_service.save_transcript(
                             content,
                             final_file_name,
-                            'Clinic/Transcripts'
+                            f'Clinic/Transcripts/{patient_name}'
                         )
                         # Delete temp file
                         await session_drive_service.delete_file(drive_file_id)
@@ -643,7 +643,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         file_info = await session_drive_service.save_transcript(
                             content,
                             final_file_name,
-                            'Clinic/Transcripts'
+                            f'Clinic/Transcripts/{patient_name}'
                         )
                     
                     # Send email notification
