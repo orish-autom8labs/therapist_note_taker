@@ -138,16 +138,21 @@ class SonioxProvider(TranscriptionProvider):
             
             # Track final tokens (accumulated) - matching official example approach
             final_tokens: List[dict] = []
-            
+
             # Track all tokens (final + non-final) for fallback mechanism
             all_accumulated_tokens: List[dict] = []
             last_sent_time = time.time()
             FALLBACK_INTERVAL = 5.0  # Send accumulated text every 5 seconds
-            
+
+            # DIAGNOSTIC: Track response numbers and speaker state
+            response_number = 0
+            total_tokens_received = 0
+            total_chunks_sent = 0
+
             # Start background task to process responses
             async def process_responses():
                 """Process streaming responses from Soniox (matching official example approach)."""
-                nonlocal final_tokens, all_accumulated_tokens, last_sent_time
+                nonlocal final_tokens, all_accumulated_tokens, last_sent_time, response_number, total_tokens_received, total_chunks_sent
                 try:
                     print('[SONIOX] Starting response processing loop')
                     first_message = True
@@ -255,23 +260,47 @@ class SonioxProvider(TranscriptionProvider):
                             
                             # Process tokens (matching official example approach)
                             if 'tokens' in data and data['tokens']:
+                                response_number += 1
+                                print(f'\n{"="*80}')
+                                print(f'[DIAGNOSTIC] RESPONSE #{response_number} - Processing {len(data["tokens"])} tokens')
+                                print(f'{"="*80}')
+
                                 # Parse tokens from current response (as per official example)
                                 non_final_tokens: List[dict] = []
                                 new_final_tokens: List[dict] = []
-                                
+
+                                token_num_in_response = 0
                                 for token in data.get("tokens", []):
+                                    token_num_in_response += 1
                                     token_text = token.get('text', '')
+                                    token_speaker = token.get('speaker')
+                                    token_is_final = token.get('is_final', False)
+
+                                    # DIAGNOSTIC: Log every token with full details
+                                    print(f'[DIAGNOSTIC] Response #{response_number}, Token #{token_num_in_response}:')
+                                    print(f'  - text: "{token_text}"')
+                                    print(f'  - speaker: {token_speaker} (type: {type(token_speaker).__name__})')
+                                    print(f'  - is_final: {token_is_final}')
+                                    print(f'  - will_filter: {token_text.strip() in ["<end>", "</s>", "<s>", "<unk>", ""]}')
+
                                     # Only process tokens with text (as per official example)
                                     if token_text:
+                                        total_tokens_received += 1
                                         if token.get('is_final', False):
                                             # Final tokens are returned once and should be appended to final_tokens
                                             final_tokens.append(token)
                                             new_final_tokens.append(token)
-                                            print(f'[SONIOX TOKEN] FINAL: text="{token_text}", speaker={token.get("speaker")}')
+                                            print(f'  → Added to final_tokens (total final tokens now: {len(final_tokens)})')
                                         else:
                                             # Non-final tokens update as more audio arrives; reset them on every response
                                             non_final_tokens.append(token)
-                                            print(f'[SONIOX TOKEN] NON-FINAL: text="{token_text}", speaker={token.get("speaker")}')
+                                            print(f'  → Added to non_final_tokens (count in this response: {len(non_final_tokens)})')
+
+                                print(f'\n[DIAGNOSTIC] Response #{response_number} Summary:')
+                                print(f'  - New final tokens: {len(new_final_tokens)}')
+                                print(f'  - Non-final tokens: {len(non_final_tokens)}')
+                                print(f'  - Total accumulated final tokens: {len(final_tokens)}')
+                                print(f'  - Total tokens received so far: {total_tokens_received}')
                                 
                                 # Render and send transcript
                                 # Strategy: 
@@ -283,27 +312,72 @@ class SonioxProvider(TranscriptionProvider):
                                 
                                 # Send new final tokens as finalized chunks (priority)
                                 if new_final_tokens:
-                                    # Group final tokens by speaker
-                                    final_by_speaker: Dict[str, List[str]] = {}
+                                    print(f'\n[DIAGNOSTIC] Processing {len(new_final_tokens)} NEW final tokens for speaker detection...')
+
+                                    # Process tokens in order, detecting speaker changes (like Soniox example)
+                                    current_speaker = None
+                                    current_texts: List[str] = []
+                                    token_idx = 0
+
                                     for token in new_final_tokens:
+                                        token_idx += 1
                                         speaker = token.get('speaker', 'Unknown')
                                         text = token.get('text', '')
-                                        if speaker not in final_by_speaker:
-                                            final_by_speaker[speaker] = []
-                                        final_by_speaker[speaker].append(text)
-                                    
-                                    # Send each speaker's final text as a new chunk
-                                    for speaker, texts in final_by_speaker.items():
-                                        transcript_text = ''.join(texts)
-                                        transcript_data = {
-                                            'text': transcript_text,
-                                            'speaker': f"Speaker {speaker}",
-                                            'is_final': True,
-                                            'timestamp': int(asyncio.get_event_loop().time() * 1000),
-                                        }
-                                        print(f'[SONIOX] Sending FINAL transcript: "{transcript_text}" from {transcript_data["speaker"]}')
-                                        await on_transcript(transcript_data)
-                                        last_sent_time = time.time()  # Reset fallback timer
+
+                                        print(f'[DIAGNOSTIC] Token {token_idx}/{len(new_final_tokens)}: speaker={speaker}, text="{text[:30]}..."')
+
+                                        # Filter out special tokens at token level
+                                        if text.strip() in ['<end>', '</s>', '<s>', '<unk>', '']:
+                                            print(f'  → FILTERED (special token)')
+                                            continue
+
+                                        # Speaker changed - send accumulated text from previous speaker
+                                        if speaker != current_speaker and current_speaker is not None:
+                                            print(f'  → SPEAKER CHANGE detected! From {current_speaker} to {speaker}')
+                                            # Send the accumulated text
+                                            transcript_text = ''.join(current_texts).strip()
+                                            if transcript_text:
+                                                # Format speaker ID consistently - convert to string
+                                                speaker_str = str(current_speaker) if current_speaker != 'Unknown' else 'Unknown'
+                                                transcript_data = {
+                                                    'text': transcript_text,
+                                                    'speaker': speaker_str,
+                                                    'is_final': True,
+                                                    'timestamp': int(asyncio.get_event_loop().time() * 1000),
+                                                }
+                                                total_chunks_sent += 1
+                                                print(f'  → SENDING CHUNK #{total_chunks_sent}: Speaker {speaker_str}, text="{transcript_text[:50]}..." ({len(transcript_text)} chars)')
+                                                await on_transcript(transcript_data)
+                                            # Reset for new speaker
+                                            current_texts = []
+                                        elif speaker == current_speaker:
+                                            print(f'  → Same speaker ({speaker}), accumulating...')
+                                        else:
+                                            print(f'  → First token (current_speaker is None), starting with speaker {speaker}')
+
+                                        # Update current speaker and accumulate text
+                                        current_speaker = speaker
+                                        current_texts.append(text)
+
+                                    # Send remaining accumulated text from last speaker
+                                    if current_texts:
+                                        transcript_text = ''.join(current_texts).strip()
+                                        if transcript_text:
+                                            # Format speaker ID consistently - convert to string
+                                            speaker_str = str(current_speaker) if current_speaker != 'Unknown' else 'Unknown'
+                                            transcript_data = {
+                                                'text': transcript_text,
+                                                'speaker': speaker_str,
+                                                'is_final': True,
+                                                'timestamp': int(asyncio.get_event_loop().time() * 1000),
+                                            }
+                                            total_chunks_sent += 1
+                                            print(f'  → SENDING FINAL CHUNK #{total_chunks_sent}: Speaker {speaker_str}, text="{transcript_text[:50]}..." ({len(transcript_text)} chars)')
+                                            await on_transcript(transcript_data)
+
+                                    print(f'[DIAGNOSTIC] Finished processing response #{response_number}. Total chunks sent so far: {total_chunks_sent}')
+
+                                    last_sent_time = time.time()  # Reset fallback timer
                                 
                                 # Fallback: Send accumulated text every 5 seconds if no final tokens
                                 # This ensures users see progress during continuous speech
@@ -313,29 +387,56 @@ class SonioxProvider(TranscriptionProvider):
                                 # Always check fallback timer, even if no tokens yet (helps debug slow Soniox)
                                 if time_since_last_send >= FALLBACK_INTERVAL:
                                     if all_accumulated_tokens:
-                                        # Group all tokens by speaker
-                                        all_by_speaker: Dict[str, List[str]] = {}
+                                        # Process tokens in order, detecting speaker changes (like Soniox example)
+                                        fallback_speaker = None
+                                        fallback_texts: List[str] = []
+
                                         for token in all_accumulated_tokens:
                                             speaker = token.get('speaker', 'Unknown')
                                             text = token.get('text', '')
-                                            if speaker not in all_by_speaker:
-                                                all_by_speaker[speaker] = []
-                                            all_by_speaker[speaker].append(text)
-                                        
-                                        # Send accumulated text for each speaker
-                                        for speaker, texts in all_by_speaker.items():
-                                            transcript_text = ''.join(texts)
-                                            if transcript_text.strip():  # Only send if not empty
+
+                                            # Filter out special tokens
+                                            if text.strip() in ['<end>', '</s>', '<s>', '<unk>', '']:
+                                                continue
+
+                                            # Speaker changed - send accumulated text from previous speaker
+                                            if speaker != fallback_speaker and fallback_speaker is not None:
+                                                # Send the accumulated text
+                                                transcript_text = ''.join(fallback_texts).strip()
+                                                if transcript_text:
+                                                    speaker_str = str(fallback_speaker) if fallback_speaker != 'Unknown' else 'Unknown'
+                                                    transcript_data = {
+                                                        'text': transcript_text,
+                                                        'speaker': speaker_str,
+                                                        'is_final': False,  # Mark as non-final (fallback)
+                                                        'fallback': True,  # Flag to indicate this is a fallback
+                                                        'timestamp': int(asyncio.get_event_loop().time() * 1000),
+                                                    }
+                                                    print(f'[SONIOX] FALLBACK: Sending accumulated text ({time_since_last_send:.1f}s): "{transcript_text}" from Speaker {speaker_str}')
+                                                    await on_transcript(transcript_data)
+                                                # Reset for new speaker
+                                                fallback_texts = []
+
+                                            # Update current speaker and accumulate text
+                                            fallback_speaker = speaker
+                                            fallback_texts.append(text)
+
+                                        # Send remaining accumulated text from last speaker
+                                        if fallback_texts:
+                                            transcript_text = ''.join(fallback_texts).strip()
+                                            if transcript_text:
+                                                speaker_str = str(fallback_speaker) if fallback_speaker != 'Unknown' else 'Unknown'
                                                 transcript_data = {
                                                     'text': transcript_text,
-                                                    'speaker': f"Speaker {speaker}",
+                                                    'speaker': speaker_str,
                                                     'is_final': False,  # Mark as non-final (fallback)
                                                     'fallback': True,  # Flag to indicate this is a fallback
                                                     'timestamp': int(asyncio.get_event_loop().time() * 1000),
                                                 }
-                                                print(f'[SONIOX] FALLBACK: Sending accumulated text ({time_since_last_send:.1f}s): "{transcript_text}" from {transcript_data["speaker"]}')
+                                                print(f'[SONIOX] FALLBACK: Sending accumulated text ({time_since_last_send:.1f}s): "{transcript_text}" from Speaker {speaker_str}')
                                                 await on_transcript(transcript_data)
-                                                last_sent_time = current_time
+
+                                        last_sent_time = current_time
                                     else:
                                         # No tokens yet, but 5 seconds passed - log status for debugging
                                         print(f'[SONIOX] FALLBACK: No tokens received yet after {time_since_last_send:.1f}s - Soniox may be processing slowly or timing out')
