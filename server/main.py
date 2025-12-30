@@ -190,15 +190,21 @@ async def save_transcript(
                 'timestamp': chunk.timestamp or time.time() * 1000,
             })
         
-        # Format transcript
-        transcript_text = format_transcript(session['transcript_buffer'])
-        
         # Generate file name
         from datetime import datetime
         now = datetime.now()
         date_str = now.strftime('%Y-%m-%d')
         time_str = now.strftime('%H-%M-%S')
         patient_name = session.get('patient_name', 'Unknown')
+        start_time = session.get('start_time', now.timestamp() * 1000)
+
+        # Format transcript with header
+        transcript_text = format_transcript_with_header(
+            session['transcript_buffer'],
+            patient_name,
+            start_time,
+            now.timestamp() * 1000
+        )
         
         if transcript_update.is_final:
             # Final save
@@ -327,16 +333,68 @@ def format_transcript(buffer: list) -> str:
     output = ''
     current_speaker = None
 
+    # Map speaker numbers to letters (Speaker 1 -> Speaker A, etc.)
+    speaker_map = {}
+    next_letter = ord('A')
+
     for chunk in buffer:
-        if chunk.get('speaker') and chunk['speaker'] != current_speaker:
+        speaker_id = chunk.get('speaker', 'Unknown')
+
+        # Assign letter to new speakers
+        if speaker_id != 'Unknown' and speaker_id not in speaker_map:
+            speaker_map[speaker_id] = chr(next_letter)
+            next_letter += 1
+
+        # Get speaker label (A, B, C, etc.)
+        speaker_label = speaker_map.get(speaker_id, speaker_id)
+
+        if speaker_label != current_speaker:
             if current_speaker is not None:
-                output += '\n\n'
-            output += f"{chunk.get('speaker', 'Unknown')}:\n"
-            current_speaker = chunk['speaker']
+                output += '\n\n'  # Blank line between speakers
+            output += f"Speaker {speaker_label}: "
+            current_speaker = speaker_label
+
         # Don't add extra space - tokens already include proper spacing
         output += chunk.get('text', '')
 
     return output.strip()
+
+
+def format_transcript_with_header(buffer: list, patient_name: str, start_time, end_time=None) -> str:
+    """Format transcript with professional header including patient name, date, and duration."""
+    from datetime import datetime
+
+    # Ensure start_time is datetime object
+    if isinstance(start_time, (int, float)):
+        start_time = datetime.fromtimestamp(start_time / 1000)  # Convert from milliseconds
+
+    # Calculate end time and duration
+    if end_time is None:
+        end_time = datetime.now()
+    elif isinstance(end_time, (int, float)):
+        end_time = datetime.fromtimestamp(end_time / 1000)
+
+    duration_seconds = (end_time - start_time).total_seconds()
+    duration_minutes = int(duration_seconds / 60)
+
+    # Create professional header
+    header = f"""{'═' * 50}
+        THERAPY SESSION TRANSCRIPT
+{'═' * 50}
+
+Patient: {patient_name}
+Date: {start_time.strftime('%B %d, %Y')}
+Time: {start_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')}
+Duration: {duration_minutes} minutes
+
+{'═' * 50}
+
+"""
+
+    # Format transcript body
+    body = format_transcript(buffer)
+
+    return header + body
 
 
 @app.websocket("/ws")
@@ -445,7 +503,12 @@ async def websocket_endpoint(websocket: WebSocket):
                         await asyncio.sleep(60)  # 1 minute
                         if transcript_buffer:
                             try:
-                                content = format_transcript(transcript_buffer)
+                                # Format with header for auto-save
+                                content = format_transcript_with_header(
+                                    transcript_buffer,
+                                    patient_name,
+                                    start_time
+                                )
                                 temp_file_name = f"{config.autosave.temp_file_prefix}{file_name}"
 
                                 if drive_file_id:
@@ -470,7 +533,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     'drive_file_id': drive_file_id,
                     'patient_name': patient_name,
                     'file_name': file_name,
-                    'start_time': datetime.now(),
+                    'start_time': time.time() * 1000,  # Store as milliseconds timestamp for consistency
                     'drive_service': user_drive_service,  # Store user-specific drive service
                     'access_token': access_token,
                     'refresh_token': refresh_token,
@@ -538,7 +601,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 # Final save to Drive
                 try:
-                    content = format_transcript(transcript_buffer)
                     session = active_sessions.get(session_id)
                     final_file_name = session['file_name'] if session else f"session_{session_id}.txt"
 
@@ -546,6 +608,15 @@ async def websocket_endpoint(websocket: WebSocket):
                     session_drive_service = session.get('drive_service') if session else None
                     if not session_drive_service:
                         raise ValueError("No drive service found for session")
+
+                    # Format transcript with header
+                    patient_name = session.get('patient_name', 'Unknown') if session else 'Unknown'
+                    start_time = session.get('start_time') if session else None
+                    content = format_transcript_with_header(
+                        transcript_buffer,
+                        patient_name,
+                        start_time
+                    )
 
                     if drive_file_id:
                         # Create new file with final name
