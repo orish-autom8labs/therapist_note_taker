@@ -1,153 +1,171 @@
-# Note Taker MVP
+# Note Taker
 
-Secure session transcription app for therapists with Hebrew support.
+Secure real-time transcription app for therapists with Hebrew support.
 
 ## Features
 
-- ✅ Real-time Hebrew transcription (no audio recording)
-- ✅ Speaker identification (Speaker 1, Speaker 2)
-- ✅ Modular transcription providers (easily switch between Soniox, Google, etc.)
-- ✅ Auto-save to Google Drive (every 1 minute)
-- ✅ Error recovery (localStorage + Drive temp files)
-- ✅ Email notifications
-- ✅ Zero-knowledge architecture (no data stored on our servers)
+- Real-time Hebrew transcription using Soniox SDK (client-side)
+- Speaker diarization (Speaker A, Speaker B, ...)
+- Auto-save to Google Drive (every 60 seconds)
+- Session recovery from localStorage (every 5 seconds)
+- 60-minute session timer with warnings
+- Audio visualizer (32-bar waveform)
+- Two-stage LLM summarization (DeepSeek + Claude)
+- Zero-knowledge architecture (no audio/data stored on servers)
+- Automatic WebSocket reconnection for mobile resilience
 
 ## Architecture
 
-### Modular Transcription Providers
-
-The app uses a pluggable provider architecture. To switch providers, simply change the `TRANSCRIPTION_PROVIDER` environment variable:
-
-```bash
-# Use Soniox (default)
-TRANSCRIPTION_PROVIDER=soniox
-
-# Use Google Cloud Speech-to-Text
-TRANSCRIPTION_PROVIDER=google
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     React Frontend                          │
+│  • Soniox SDK (WebSocket to Soniox Cloud)                  │
+│  • Audio visualizer, session timer, transcript display      │
+│  • localStorage recovery, auto-save to backend             │
+└─────────────────────────┬───────────────────────────────────┘
+                          │ REST API
+┌─────────────────────────▼───────────────────────────────────┐
+│                   FastAPI Backend                           │
+│  • Google OAuth & Drive integration                        │
+│  • Soniox temporary API key generation                     │
+│  • Two-stage LLM summarization pipeline                    │
+│  • Email notifications                                      │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### Adding a New Provider
+### Key Design Decisions
 
-1. Create a new provider class extending `TranscriptionProvider`:
-   ```python
-   # server/src/providers/my_new_provider.py
-   from .transcription_provider import TranscriptionProvider
-   
-   class MyNewProvider(TranscriptionProvider):
-       def get_name(self):
-           return 'MyNewProvider'
-       
-       def supports_language(self, code):
-           # ...
-           pass
-       
-       def supports_speaker_diarization(self):
-           return True
-       
-       async def start_streaming_session(self, options, on_transcript, on_error):
-           # ...
-           pass
-       
-       async def process_batch(self, audio_buffer, options):
-           # ...
-           pass
-   ```
+- **Client-side transcription**: Soniox SDK runs in browser, not proxied through server
+- **Pluggable providers**: Easy to switch transcription providers (Soniox, Google, Mock)
+- **Two-stage summarization**: Cheap model (DeepSeek) for chunking, quality model (Claude) for synthesis
 
-2. Register it in `provider_factory.py`:
-   ```python
-   case 'mynew':
-       return MyNewProvider(config)
-   ```
+## Quick Start
 
-3. Add configuration in `.env` and `config.py`
-
-### Provider Implementation Notes
-
-**Soniox Provider:**
-- The current implementation uses a placeholder structure
-- You'll need to integrate with Soniox's actual API (REST or SDK)
-- Check [Soniox documentation](https://docs.soniox.com) for the latest API
-- The provider structure is ready - just implement the API calls
-
-**Google Provider:**
-- Requires `@google-cloud/speech` package (already in dependencies)
-- Needs service account JSON credentials
-- Supports streaming and batch processing
-- Full speaker diarization support
-
-## Setup
+See [QUICK_START_GUIDE.md](QUICK_START_GUIDE.md) for detailed setup instructions.
 
 ### Prerequisites
 
+- Python 3.10+
 - Node.js 18+
-- npm or yarn
-- Google Cloud account (for Drive integration)
-- Transcription provider API key (Soniox or Google)
+- Google Cloud account (for OAuth & Drive)
+- Soniox API key
 
 ### Installation
 
 ```bash
-# Install all dependencies
-npm run install-all
+# Backend
+cd server
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
 
-# Or install separately
+# Frontend
+cd client
 npm install
-cd server && npm install
-cd ../client && npm install
 ```
 
 ### Configuration
 
-1. Copy `.env.example` to `server/.env`
-2. Fill in your API keys and credentials
-3. Configure your transcription provider
+1. Copy `server/.env.example` to `server/.env`
+2. Fill in API keys:
+   - `SONIOX_API_KEY` - Soniox transcription
+   - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` - OAuth
+   - `DEEPSEEK_API_KEY` / `ANTHROPIC_API_KEY` - Summarization (optional)
 
 ### Running
 
 ```bash
-# Development (runs both frontend and backend)
-npm run dev
+# Terminal 1: Backend
+cd server
+source venv/bin/activate
+python run.py
+# Runs on http://localhost:3001
 
-# Or separately:
-npm run server  # Backend on :3001
-npm run client  # Frontend on :3000
+# Terminal 2: Frontend
+cd client
+npm start
+# Runs on http://localhost:3000
 ```
 
 ## Project Structure
 
 ```
 note_taker/
-├── server/                 # Backend (Node.js/Express)
+├── client/                     # React Frontend
 │   ├── src/
-│   │   ├── providers/      # Transcription provider modules
-│   │   │   ├── TranscriptionProvider.js  # Abstract base class
-│   │   │   ├── SonioxProvider.js        # Soniox implementation
-│   │   │   ├── GoogleProvider.js         # Google implementation
-│   │   │   └── ProviderFactory.js        # Provider factory
-│   │   ├── services/      # Business logic
-│   │   ├── routes/        # API routes
-│   │   └── config.js      # Configuration
-│   └── index.js           # Server entry point
-├── client/                # Frontend (React)
+│   │   ├── components/         # React components
+│   │   │   ├── ActiveSession.js    # Main recording UI
+│   │   │   ├── AudioVisualizer.js  # 32-bar waveform
+│   │   │   ├── SessionTimer.js     # 60-min countdown
+│   │   │   └── ...
+│   │   ├── hooks/              # Custom React hooks
+│   │   │   ├── useSonioxClient.js  # Soniox SDK wrapper
+│   │   │   ├── useSessionTimer.js  # Timer logic
+│   │   │   └── useAudioVisualizer.js
+│   │   ├── services/           # API clients
+│   │   └── config/             # Configuration
+│   └── Dockerfile
+│
+├── server/                     # FastAPI Backend (Python)
+│   ├── main.py                 # API endpoints
+│   ├── run.py                  # Development runner
 │   ├── src/
-│   │   ├── components/    # React components
-│   │   ├── services/      # API clients
-│   │   └── App.js
-│   └── public/
-└── package.json
+│   │   ├── config.py           # Configuration (Pydantic)
+│   │   ├── providers/          # Transcription providers
+│   │   │   ├── soniox_provider.py
+│   │   │   ├── google_provider.py
+│   │   │   └── llm/            # LLM providers
+│   │   │       ├── deepseek_provider.py
+│   │   │       └── claude_provider.py
+│   │   └── services/           # Business logic
+│   │       ├── drive_service.py
+│   │       ├── email_service.py
+│   │       └── summarization/  # Two-stage pipeline
+│   ├── requirements.txt
+│   └── Dockerfile
+│
+├── docs/                       # Documentation
+│   └── README.md               # Documentation index
+│
+└── Key Documentation:
+    ├── QUICK_START_GUIDE.md    # Setup & testing guide
+    ├── PRD.md                  # Product requirements
+    ├── PROVIDER_GUIDE.md       # Transcription providers
+    ├── DEPLOYMENT_AND_OAUTH.md # Deployment guide
+    └── CLAUDE.md               # Claude Code context
 ```
-
-## Environment Variables
-
-See `server/.env.example` for all required environment variables.
 
 ## Documentation
 
-- `UX_DESIGN.md` - UI/UX design specifications
-- `RECOMMENDATIONS.md` - Technical decisions and recommendations
-- `TECHNICAL_ANALYSIS.md` - Detailed technical analysis
+| Document | Purpose |
+|----------|---------|
+| [QUICK_START_GUIDE.md](QUICK_START_GUIDE.md) | Setup and testing instructions |
+| [PRD.md](PRD.md) | Complete product requirements |
+| [PROVIDER_GUIDE.md](PROVIDER_GUIDE.md) | Transcription provider architecture |
+| [DEPLOYMENT_AND_OAUTH.md](DEPLOYMENT_AND_OAUTH.md) | Deployment and OAuth setup |
+| [GOOGLE_OAUTH_SETUP.md](GOOGLE_OAUTH_SETUP.md) | Google Cloud Console setup |
+| [server/SUMMARIZATION.md](server/SUMMARIZATION.md) | LLM summarization pipeline |
+
+## Environment Variables
+
+### Required
+
+| Variable | Description |
+|----------|-------------|
+| `SONIOX_API_KEY` | Soniox API key for transcription |
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
+
+### Optional (Summarization)
+
+| Variable | Description |
+|----------|-------------|
+| `DEEPSEEK_API_KEY` | DeepSeek API key (Stage 1 chunking) |
+| `ANTHROPIC_API_KEY` | Anthropic API key (Stage 2 synthesis) |
+| `SUMMARIZATION_ENABLED` | Enable/disable summarization (default: true) |
+
+See `server/.env.example` for complete list.
 
 ## License
 
 ISC
-
