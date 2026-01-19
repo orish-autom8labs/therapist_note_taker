@@ -73,6 +73,55 @@ class EmailConfig:
     admin_email: str = os.getenv('ADMIN_EMAIL', '')
 
 
+class SummarizationConfig:
+    """
+    Summarization configuration.
+
+    Two-stage pipeline:
+    - Stage 1 (Chunking): Cheap model for summarizing transcript segments
+    - Stage 2 (Synthesis): Quality model for final summary generation
+
+    Change these settings to modify summarization behavior.
+    """
+
+    # ═══════════════════════════════════════════════════════════════════
+    # MASTER SWITCH
+    # ═══════════════════════════════════════════════════════════════════
+    enabled: bool = os.getenv('SUMMARIZATION_ENABLED', 'true').lower() == 'true'
+
+    # ═══════════════════════════════════════════════════════════════════
+    # STAGE 1: CHUNKING CONFIGURATION
+    # Change these lines to modify chunking behavior
+    # ═══════════════════════════════════════════════════════════════════
+    stage1_provider: str = os.getenv('SUMMARIZATION_STAGE1_PROVIDER', 'deepseek')
+    stage1_model: str = os.getenv('SUMMARIZATION_STAGE1_MODEL', 'deepseek-chat')
+    stage1_approach: str = os.getenv('SUMMARIZATION_STAGE1_APPROACH', 'speaker_segments')
+    # Options: 'speaker_segments' (breaks at speaker changes, 3-8 min)
+    #          'fixed_time' (fixed intervals)
+    stage1_chunk_minutes_min: int = int(os.getenv('SUMMARIZATION_CHUNK_MIN_MINUTES', '3'))
+    stage1_chunk_minutes_max: int = int(os.getenv('SUMMARIZATION_CHUNK_MAX_MINUTES', '8'))
+
+    # ═══════════════════════════════════════════════════════════════════
+    # STAGE 2: SYNTHESIS CONFIGURATION
+    # Change these lines to modify synthesis behavior
+    # ═══════════════════════════════════════════════════════════════════
+    stage2_provider: str = os.getenv('SUMMARIZATION_STAGE2_PROVIDER', 'claude')
+    stage2_model: str = os.getenv('SUMMARIZATION_STAGE2_MODEL', 'claude-3-haiku-20240307')
+    stage2_styles: list = ['key_topics', 'detailed_notes']  # Generate both styles
+
+    # ═══════════════════════════════════════════════════════════════════
+    # PROVIDER API KEYS (from environment)
+    # ═══════════════════════════════════════════════════════════════════
+    deepseek_api_key: str = os.getenv('DEEPSEEK_API_KEY', '')
+    anthropic_api_key: str = os.getenv('ANTHROPIC_API_KEY', '')
+    openai_api_key: str = os.getenv('OPENAI_API_KEY', '')
+
+    # ═══════════════════════════════════════════════════════════════════
+    # SAFETY LIMITS
+    # ═══════════════════════════════════════════════════════════════════
+    max_cost_per_session_usd: float = float(os.getenv('SUMMARIZATION_MAX_COST_USD', '0.50'))
+
+
 class Config:
     """Main configuration class."""
     server: ServerConfig = ServerConfig()
@@ -80,6 +129,7 @@ class Config:
     drive: DriveConfig = DriveConfig()
     autosave: AutosaveConfig = AutosaveConfig()
     email: EmailConfig = EmailConfig()
+    summarization: SummarizationConfig = SummarizationConfig()
 
 
 # Global config instance

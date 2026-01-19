@@ -11,10 +11,16 @@ import sessionConfig from '../config/sessionConfig';
 function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }) {
   const [error, setError] = useState(null);
   const [audioStream, setAudioStream] = useState(null);
+  const [backgroundWarning, setBackgroundWarning] = useState(false);
+  const [transcriptStalled, setTranscriptStalled] = useState(false);
+  const [stallDuration, setStallDuration] = useState(0);
   const transcriptEndRef = useRef(null);
   const sessionIdRef = useRef(null);
   const autoSaveCleanupRef = useRef(null);
   const stopSessionRef = useRef(null);
+  const wakeLockRef = useRef(null);
+  const lastTokenTimeRef = useRef(Date.now());
+  const stallEventsRef = useRef([]); // Track stall events for diagnostics
 
   // Generate session ID
   useEffect(() => {
@@ -40,6 +46,62 @@ function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }
       }
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Wake Lock API - Prevent screen from auto-locking during session
+  useEffect(() => {
+    const requestWakeLock = async () => {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLockRef.current = await navigator.wakeLock.request('screen');
+          console.log('[WAKE LOCK] ✓ Screen will stay on during session');
+
+          wakeLockRef.current.addEventListener('release', () => {
+            console.log('[WAKE LOCK] Released');
+          });
+        } else {
+          console.log('[WAKE LOCK] Not supported on this device');
+        }
+      } catch (err) {
+        console.error('[WAKE LOCK] Failed:', err);
+      }
+    };
+
+    requestWakeLock();
+
+    // Re-request wake lock when page becomes visible again
+    const handleVisibilityChange = () => {
+      if (wakeLockRef.current !== null && document.visibilityState === 'visible') {
+        requestWakeLock();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      wakeLockRef.current?.release();
+      wakeLockRef.current = null;
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
+  // Page Visibility API - Detect when app goes to background
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        console.warn('[VISIBILITY] ⚠️ App went to background - transcription may pause!');
+        setBackgroundWarning(true);
+      } else {
+        console.log('[VISIBILITY] ✓ App returned to foreground');
+        setBackgroundWarning(false);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
 
   // Audio visualization
   const { waveformData, isActive: isAudioActive } = useAudioVisualizer(audioStream);
@@ -72,7 +134,7 @@ function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }
     onMaxTime: handleMaxTime,
   });
 
-  // Soniox SDK hook
+  // Soniox SDK hook with reconnection support
   const {
     state,
     finalTokens,
@@ -81,8 +143,11 @@ function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }
     startTranscription,
     stopTranscription,
     isRecording,
+    isReconnecting,
+    reconnectAttempt,
   } = useSonioxClient({
     enableSpeakerDiarization: true,
+    maxReconnectAttempts: 5,
     onError: (err) => {
       console.error('[SONIOX] Transcription error:', err);
       setError(err.message || 'Transcription error');
@@ -96,6 +161,14 @@ function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }
     onFinished: () => {
       console.log('[SESSION] Transcription finished');
       stopTimer(); // Stop timer when transcription finishes
+    },
+    onReconnecting: (attempt, maxAttempts) => {
+      console.log(`[SESSION] ⚠️ Reconnecting... attempt ${attempt}/${maxAttempts}`);
+    },
+    onReconnected: () => {
+      console.log('[SESSION] ✓ Successfully reconnected!');
+      // Clear any previous error when successfully reconnected
+      setError(null);
     },
   });
 
@@ -188,6 +261,59 @@ function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }
     }
   }, [sonioxError]);
 
+  // Track last token time for stall detection
+  useEffect(() => {
+    if (finalTokens.length > 0 || nonFinalTokens.length > 0) {
+      lastTokenTimeRef.current = Date.now();
+      // If we were stalled and tokens resumed, log recovery
+      if (transcriptStalled) {
+        const recoveryEvent = {
+          type: 'STALL_RECOVERED',
+          timestamp: new Date().toISOString(),
+          stallDurationSeconds: stallDuration,
+          tokenCountAtRecovery: finalTokens.length,
+        };
+        stallEventsRef.current.push(recoveryEvent);
+        console.log('[STALL DETECTOR] ✓ Transcript resumed after', stallDuration, 'seconds');
+      }
+      setTranscriptStalled(false);
+      setStallDuration(0);
+    }
+  }, [finalTokens, nonFinalTokens, transcriptStalled, stallDuration]);
+
+  // Stall detection - check every 5 seconds if recording but no tokens received
+  useEffect(() => {
+    if (!isRecording) return;
+
+    const STALL_THRESHOLD_SECONDS = 30; // Consider stalled after 30 seconds of no tokens
+
+    const checkInterval = setInterval(() => {
+      const secondsSinceLastToken = Math.floor((Date.now() - lastTokenTimeRef.current) / 1000);
+
+      if (secondsSinceLastToken >= STALL_THRESHOLD_SECONDS) {
+        if (!transcriptStalled) {
+          // First detection of stall
+          const stallEvent = {
+            type: 'STALL_DETECTED',
+            timestamp: new Date().toISOString(),
+            secondsSinceLastToken,
+            tokenCountAtStall: finalTokens.length,
+            sessionElapsedSeconds: elapsed,
+            state: state,
+            wasInBackground: document.hidden,
+            userAgent: navigator.userAgent,
+          };
+          stallEventsRef.current.push(stallEvent);
+          console.error('[STALL DETECTOR] ⚠️ TRANSCRIPT STALLED!', stallEvent);
+        }
+        setTranscriptStalled(true);
+        setStallDuration(secondsSinceLastToken);
+      }
+    }, 5000); // Check every 5 seconds
+
+    return () => clearInterval(checkInterval);
+  }, [isRecording, transcriptStalled, finalTokens.length, elapsed, state]);
+
   const stopSession = async () => {
     try {
       console.log('[SESSION] Stopping session...');
@@ -209,6 +335,19 @@ function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }
             timestamp: t.timestamp || Date.now(),
           }));
 
+          // Include diagnostic info if there were any stall events
+          const diagnosticInfo = stallEventsRef.current.length > 0 ? {
+            stallEvents: stallEventsRef.current,
+            totalStallCount: stallEventsRef.current.filter(e => e.type === 'STALL_DETECTED').length,
+            recoveryCount: stallEventsRef.current.filter(e => e.type === 'STALL_RECOVERED').length,
+            sessionDurationSeconds: elapsed,
+            finalTokenCount: finalTokens.length,
+          } : null;
+
+          if (diagnosticInfo) {
+            console.log('[SESSION] Including diagnostic info in save:', diagnosticInfo);
+          }
+
           const result = await syncTranscript(
             sessionIdRef.current,
             transcriptChunks,
@@ -217,7 +356,8 @@ function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }
               accessToken: user.accessToken,
               refreshToken: user.refreshToken,
             },
-            sessionData.patientName
+            sessionData.patientName,
+            diagnosticInfo // Pass diagnostic info
           );
 
           console.log('[SESSION] Final save result:', result);
@@ -270,27 +410,83 @@ function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }
         formatTime={formatTime}
       />
 
+      {/* Background Warning Banner */}
+      {backgroundWarning && (
+        <div style={{
+          background: '#ff9800',
+          color: 'white',
+          padding: '15px',
+          borderRadius: '8px',
+          marginBottom: '20px',
+          fontWeight: '600',
+          textAlign: 'center',
+          animation: 'pulse 2s infinite'
+        }}>
+          ⚠️ App is in background - Return to this screen to continue recording!
+        </div>
+      )}
+
+      {/* Reconnection Banner */}
+      {isReconnecting && (
+        <div style={{
+          background: '#3498db',
+          color: 'white',
+          padding: '15px',
+          borderRadius: '8px',
+          marginBottom: '20px',
+          fontWeight: '600',
+          textAlign: 'center',
+          animation: 'pulse 1.5s infinite'
+        }}>
+          🔄 Reconnecting... (attempt {reconnectAttempt}/5)
+          <br />
+          <small style={{ fontWeight: 'normal', opacity: 0.9 }}>
+            Your transcript is preserved. Please wait...
+          </small>
+        </div>
+      )}
+
+      {/* Transcript Stall Warning Banner */}
+      {transcriptStalled && (
+        <div style={{
+          background: '#e74c3c',
+          color: 'white',
+          padding: '15px',
+          borderRadius: '8px',
+          marginBottom: '20px',
+          fontWeight: '600',
+          textAlign: 'center',
+          animation: 'pulse 1s infinite'
+        }}>
+          ⚠️ TRANSCRIPT STALLED - No new text for {stallDuration}s! Recording may have stopped.
+          <br />
+          <small style={{ fontWeight: 'normal', opacity: 0.9 }}>
+            Try stopping and saving the session. Diagnostic info will be saved.
+          </small>
+        </div>
+      )}
+
       {/* Audio Visualizer */}
       <AudioVisualizer waveformData={waveformData} isActive={isAudioActive && isRecording} />
 
       {/* Transcribing Indicator */}
-      {isRecording && (
+      {(isRecording || isReconnecting) && (
         <div style={{
           display: 'flex',
           alignItems: 'center',
           gap: '10px',
           marginBottom: '20px',
-          color: '#E74C3C',
+          color: isReconnecting ? '#3498db' : '#E74C3C',
           fontWeight: '600'
         }}>
           <div style={{
             width: '12px',
             height: '12px',
-            background: '#E74C3C',
+            background: isReconnecting ? '#3498db' : '#E74C3C',
             borderRadius: '50%',
             animation: 'pulse 2s infinite'
           }}></div>
-          <span>Transcribing...</span>
+          <span>{isReconnecting ? 'Reconnecting...' : 'Transcribing...'}</span>
         </div>
       )}
 

@@ -40,7 +40,28 @@ function SessionSetup({ user, onStart, onBack }) {
         marginBottom: '20px',
         fontSize: '14px'
       }}>
-        📁 Save to: <strong>Clinic/Transcripts</strong>
+        📁 Save to: <strong>Clinic/Transcripts/{patientName.trim() || 'PatientName'}</strong>
+      </div>
+
+      {/* Important Instructions for Screen Lock */}
+      <div style={{
+        background: '#fff3cd',
+        border: '2px solid #ffc107',
+        padding: '15px',
+        borderRadius: '8px',
+        marginBottom: '20px',
+        fontSize: '14px',
+        lineHeight: '1.6'
+      }}>
+        <div style={{ fontWeight: 'bold', marginBottom: '10px', color: '#856404' }}>
+          📱 Important: Keep Your Screen On During Recording
+        </div>
+        <ul style={{ margin: '0', paddingLeft: '20px', color: '#856404' }}>
+          <li>Do not lock your phone manually</li>
+          <li>Do not switch to other apps</li>
+          <li>Keep this screen visible during the entire session</li>
+          <li>Your screen will stay on automatically</li>
+        </ul>
       </div>
 
       <button

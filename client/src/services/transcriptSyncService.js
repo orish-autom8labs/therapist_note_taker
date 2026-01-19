@@ -7,14 +7,16 @@ const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:3001';
 
 /**
  * Send transcript chunks to the server for saving.
- * 
+ *
  * @param {string} sessionId - Session ID
  * @param {Array} chunks - Array of transcript chunks
  * @param {boolean} isFinal - Whether this is the final save
  * @param {Object} userTokens - User's Google OAuth tokens (for Drive access)
+ * @param {string} patientName - Patient name
+ * @param {Object} diagnosticInfo - Optional diagnostic info (stall events, etc.)
  * @returns {Promise<Object>} Server response with file info
  */
-export async function syncTranscript(sessionId, chunks, isFinal = false, userTokens = null, patientName = null) {
+export async function syncTranscript(sessionId, chunks, isFinal = false, userTokens = null, patientName = null, diagnosticInfo = null) {
   try {
     const body = {
       sessionId,
@@ -36,6 +38,11 @@ export async function syncTranscript(sessionId, chunks, isFinal = false, userTok
     // Add patient name if provided
     if (patientName) {
       body.patientName = patientName;
+    }
+
+    // Add diagnostic info if provided (for debugging stall issues)
+    if (diagnosticInfo) {
+      body.diagnosticInfo = diagnosticInfo;
     }
 
     const response = await fetch(`${API_BASE}/api/sessions/${sessionId}/transcript`, {
