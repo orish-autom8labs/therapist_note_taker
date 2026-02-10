@@ -707,6 +707,16 @@ PORT=3001
 
 ---
 
+## Recently Implemented (Feb 2026)
+
+### Reliability Upgrade: Firestore + Retry + Summary Polling
+- **Summary Link in UI**: After session ends, SuccessScreen polls for summary status and shows a "View Summary" button when ready
+- **LLM Retry Logic**: All LLM calls use exponential backoff (2s→4s→8s, max 3 retries) for transient network errors
+- **Firestore Metadata Layer**: Session lifecycle tracked in Firestore (status, attempts, costs) — no transcript text stored
+- **Idempotency Guard**: Duplicate "Stop & Save" clicks return existing data instead of creating duplicate files
+- **Drive Safeguards**: Duplicate summary detection, content size cap (500KB), max 1 error file per session
+- **Staging Environment**: Cloud Run revision tags for safe testing without affecting production
+
 ## Future Enhancements
 
 ### Planned Features (Not Yet Implemented)

@@ -14,6 +14,7 @@ function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }
   const [backgroundWarning, setBackgroundWarning] = useState(false);
   const [transcriptStalled, setTranscriptStalled] = useState(false);
   const [stallDuration, setStallDuration] = useState(0);
+  const [isSaving, setIsSaving] = useState(false); // Debounce "Stop & Save"
   const transcriptEndRef = useRef(null);
   const sessionIdRef = useRef(null);
   const autoSaveCleanupRef = useRef(null);
@@ -315,6 +316,13 @@ function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }
   }, [isRecording, transcriptStalled, finalTokens.length, elapsed, state]);
 
   const stopSession = async () => {
+    // Debounce: prevent duplicate "Stop & Save" clicks
+    if (isSaving) {
+      console.log('[SESSION] Already saving, ignoring duplicate stop request');
+      return;
+    }
+    setIsSaving(true);
+
     try {
       console.log('[SESSION] Stopping session...');
       console.log('[SESSION] allTokens.length:', allTokens.length);
@@ -374,13 +382,15 @@ function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }
               name: result.fileInfo.name,
               webViewLink: result.fileInfo.web_view_link || result.fileInfo.webViewLink,
             };
-            onComplete(fileInfo);
+            // Pass sessionId for summary polling
+            onComplete(fileInfo, result.sessionId || sessionIdRef.current);
           } else {
-            onComplete({ message: 'Session saved successfully' });
+            onComplete({ message: 'Session saved successfully' }, sessionIdRef.current);
           }
         } catch (error) {
           console.error('[ERROR] Failed to save final transcript:', error);
           setError(`Failed to save: ${error.message}`);
+          setIsSaving(false); // Allow retry on error
           onComplete({ error: error.message });
         }
       } else {
@@ -389,6 +399,7 @@ function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }
     } catch (error) {
       console.error('[ERROR] Error stopping session:', error);
       setError(error.message);
+      setIsSaving(false); // Allow retry on error
     }
   };
 
@@ -599,8 +610,8 @@ function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }
         <div ref={transcriptEndRef} />
       </div>
 
-      <button className="btn-danger" onClick={stopSession}>
-        ⏹ Stop & Save
+      <button className="btn-danger" onClick={stopSession} disabled={isSaving}>
+        {isSaving ? 'Saving...' : 'Stop & Save'}
       </button>
     </div>
   );

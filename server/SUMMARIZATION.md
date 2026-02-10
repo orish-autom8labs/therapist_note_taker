@@ -1,6 +1,6 @@
 # Summarization Pipeline Documentation
 
-**Last Updated**: 2026-01-18
+**Last Updated**: 2026-02-10
 
 ## Overview
 
@@ -220,6 +220,47 @@ server/src/
         └── detailed_notes_he.md       # Stage 2 detailed notes (Hebrew)
 ```
 
+## Retry Logic
+
+All LLM calls use `complete_with_retry()` with exponential backoff:
+
+```
+Attempt 1 → fail → wait 2s
+Attempt 2 → fail → wait 4s
+Attempt 3 → fail → wait 8s
+Attempt 4 → fail → raise error
+```
+
+**Retryable errors** (transient, worth retrying):
+- `ConnectError`, `ReadError`, `TimeoutError` — network issues
+- HTTP 429 — rate limit
+- HTTP 503, 529 — server overloaded
+
+**Non-retryable errors** (fail immediately):
+- HTTP 401 — bad API key
+- HTTP 402 — billing issue
+- HTTP 403, 404 — permanent errors
+
+Implementation: `server/src/providers/llm/retry.py`
+
+## Firestore Tracking
+
+Each session's summarization lifecycle is tracked in Firestore:
+
+```
+transcript_saved → summarizing → completed
+                                → summarization_failed
+```
+
+**Document fields** (`{prefix}_sessions/{session_id}`):
+- `status`: Current state
+- `summarization.attempts`: Number of attempts
+- `summarization.last_error`: Error message (if failed)
+- `summarization.total_cost_usd`: Total LLM cost
+- `summaries.detailed_notes`: Drive file info for summary
+
+The frontend polls `GET /api/sessions/{id}/status` every 5 seconds to show summary progress and enable the "View Summary" button when ready.
+
 ## Error Handling
 
 The summarization service **never fails the transcript save**:
@@ -232,6 +273,7 @@ The summarization service **never fails the transcript save**:
    - Transcript info (size, first text)
    - Configuration at time of error
    - Full traceback
+5. Max 1 error file per session (overwrites existing)
 
 Error reports are saved as separate files: `{patient}_Summary_ERROR.txt`
 

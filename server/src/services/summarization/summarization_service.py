@@ -231,12 +231,19 @@ class SummarizationService:
         if SummaryStyle.DETAILED_NOTES in synthesis_results:
             detailed_notes = synthesis_results[SummaryStyle.DETAILED_NOTES].content
 
-        # Combine into single content
+        # Combine into single content (use Hebrew headers if Hebrew detected)
         content_parts = []
+        if language == 'he':
+            key_topics_header = "סיכום נושאים מרכזיים"
+            detailed_notes_header = "הערות מפורטות של הפגישה"
+        else:
+            key_topics_header = "KEY TOPICS SUMMARY"
+            detailed_notes_header = "DETAILED SESSION NOTES"
+
         if key_topics:
-            content_parts.append(f"{'='*50}\nKEY TOPICS SUMMARY\n{'='*50}\n\n{key_topics}")
+            content_parts.append(f"{'='*50}\n{key_topics_header}\n{'='*50}\n\n{key_topics}")
         if detailed_notes:
-            content_parts.append(f"{'='*50}\nDETAILED SESSION NOTES\n{'='*50}\n\n{detailed_notes}")
+            content_parts.append(f"{'='*50}\n{detailed_notes_header}\n{'='*50}\n\n{detailed_notes}")
 
         content = "\n\n".join(content_parts) if content_parts else "No summaries generated."
 
@@ -282,7 +289,7 @@ class SummarizationService:
                 end_time=segment.end_timestamp,
                 duration_minutes=f"{segment.duration_minutes:.1f}"
             )
-            tasks.append(provider.complete(prompt, max_tokens=1024, temperature=0.3))
+            tasks.append(provider.complete_with_retry(prompt, max_tokens=1024, temperature=0.3))
 
         # Execute in parallel
         results = await asyncio.gather(*tasks, return_exceptions=True)

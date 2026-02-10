@@ -28,15 +28,20 @@ cd client && npm start
 │  ├── Soniox SDK → WebSocket → Soniox Cloud                 │
 │  ├── useSonioxClient.js (with auto-reconnection)           │
 │  ├── Audio Visualizer, Session Timer (60 min)              │
-│  └── localStorage backup (5s) + Drive sync (60s)           │
+│  ├── localStorage backup (5s) + Drive sync (60s)           │
+│  └── useSummaryPolling.js → polls status every 5s          │
 └─────────────────────────┬───────────────────────────────────┘
                           │ REST API
 ┌─────────────────────────▼───────────────────────────────────┐
 │  FastAPI Backend                                            │
 │  ├── /v1/auth/temporary-api-key → Soniox temp keys         │
 │  ├── /auth/google/* → OAuth flow                           │
-│  ├── /api/sessions/*/transcript → Save to Google Drive     │
-│  └── Background: LLM Summarization (DeepSeek → Claude)     │
+│  ├── /api/sessions/*/transcript → Save to Drive + Firestore│
+│  ├── /api/sessions/*/status → Summary polling endpoint     │
+│  └── Background: LLM Summarization with retry (2s→4s→8s)  │
+├─────────────────────────────────────────────────────────────┤
+│  Google Cloud Firestore (metadata only)                     │
+│  └── {prefix}_sessions/{id} → status, Drive IDs, costs     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -60,11 +65,19 @@ cd client && npm start
 ### Backend Services
 | File | Purpose |
 |------|---------|
-| `server/main.py` | FastAPI endpoints |
-| `server/src/config.py` | Configuration (Pydantic) |
+| `server/main.py` | FastAPI endpoints + Firestore integration |
+| `server/src/config.py` | Configuration (incl. FirestoreConfig) |
 | `server/src/providers/soniox_provider.py` | Soniox temp API key generation |
 | `server/src/services/drive_service.py` | Google Drive operations |
+| `server/src/services/firestore_service.py` | Firestore CRUD, encrypted token storage |
 | `server/src/services/summarization/` | Two-stage LLM pipeline |
+| `server/src/providers/llm/retry.py` | Exponential backoff retry logic |
+
+### Summary Polling (Client-Side)
+| File | Purpose |
+|------|---------|
+| `client/src/hooks/useSummaryPolling.js` | Polls status endpoint every 5s |
+| `client/src/components/SuccessScreen.js` | Shows transcript/summary links + status |
 
 ### Configuration
 | File | Purpose |
@@ -86,6 +99,8 @@ cd client && npm start
 | [TESTING_PLAN.md](TESTING_PLAN.md) | Test scenarios and results |
 | [.claude/DEVELOPMENT_GUIDELINES.md](.claude/DEVELOPMENT_GUIDELINES.md) | Git workflow, commit format |
 | [docs/README.md](docs/README.md) | Documentation index |
+| [docs/architecture.md](docs/architecture.md) | System architecture with Firestore |
+| [docs/decisions.md](docs/decisions.md) | Architecture Decision Records |
 
 ## Environment Variables
 
@@ -101,6 +116,14 @@ GOOGLE_CLIENT_SECRET=xxx     # OAuth
 DEEPSEEK_API_KEY=xxx         # Stage 1 - chunking
 ANTHROPIC_API_KEY=xxx        # Stage 2 - synthesis
 SUMMARIZATION_ENABLED=true   # Enable/disable
+```
+
+### Firestore
+```bash
+FIRESTORE_ENABLED=true                # Enable session tracking
+GCP_PROJECT_ID=therapistnottaker      # GCP project
+FIRESTORE_ENCRYPTION_KEY=xxx          # Fernet key for token encryption
+FIRESTORE_COLLECTION_PREFIX=prod      # "prod" or "staging"
 ```
 
 ## Current Issues & Status
@@ -119,7 +142,16 @@ SUMMARIZATION_ENABLED=true   # Enable/disable
 ### Summarization Pipeline (WORKING)
 - Two-stage: DeepSeek (chunking) → Claude Haiku (synthesis)
 - Max 4096 output tokens (Haiku limit)
+- Retry logic: 2s → 4s → 8s backoff on transient errors
+- Firestore tracks status: transcript_saved → summarizing → completed/failed
+- Frontend polls for status and shows "View Summary" button
 - See `server/SUMMARIZATION.md` for details
+
+### Staging Environment
+- Deploy: `./scripts/deploy_backend_staging.sh` + `./scripts/deploy_frontend_staging.sh`
+- Promote: `./scripts/promote_staging.sh`
+- Uses Cloud Run revision tags (--no-traffic --tag staging)
+- Firestore isolation via collection prefix (staging vs prod)
 
 ## Console Log Prefixes
 
@@ -133,6 +165,10 @@ SUMMARIZATION_ENABLED=true   # Enable/disable
 | `[VISIBILITY]` | Tab visibility |
 | `[STALL DETECTOR]` | Transcript stall detection |
 | `[SUMMARIZATION]` | LLM pipeline (backend) |
+| `[FIRESTORE]` | Firestore session tracking |
+| `[IDEMPOTENCY]` | Duplicate save detection |
+| `[RETRY]` | LLM retry attempts |
+| `[POLL]` | Frontend summary polling |
 
 ## Git Workflow
 

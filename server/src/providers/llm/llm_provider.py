@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, Any, Optional
 
+from .retry import retry_with_backoff
+
 
 @dataclass
 class LLMResponse:
@@ -87,6 +89,31 @@ class LLMProvider(ABC):
     def get_max_context_length(self) -> int:
         """Get maximum context length in tokens."""
         pass
+
+    async def complete_with_retry(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.3,
+        max_retries: int = 3,
+    ) -> 'LLMResponse':
+        """
+        Generate completion with automatic retry on transient errors.
+
+        Uses exponential backoff: 2s -> 4s -> 8s.
+        Non-retryable errors (401, 402) are raised immediately.
+        """
+        return await retry_with_backoff(
+            self.complete,
+            prompt,
+            system_prompt=system_prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            max_retries=max_retries,
+            base_delay=2.0,
+            max_delay=16.0,
+        )
 
     def calculate_cost(self, input_tokens: int, output_tokens: int) -> float:
         """Calculate cost for a completion."""

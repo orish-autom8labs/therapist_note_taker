@@ -79,8 +79,8 @@ function App() {
     setScreen('recording');
   };
 
-  const handleSessionComplete = (fileInfo) => {
-    setSessionData({ ...sessionData, fileInfo });
+  const handleSessionComplete = (fileInfo, sessionId) => {
+    setSessionData({ ...sessionData, fileInfo, sessionId });
     setScreen('success');
   };
 
@@ -142,6 +142,7 @@ function App() {
       {screen === 'success' && (
         <SuccessScreen
           fileInfo={sessionData?.fileInfo}
+          sessionId={sessionData?.sessionId}
           onNewSession={handleNewSession}
         />
       )}

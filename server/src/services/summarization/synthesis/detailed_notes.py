@@ -43,8 +43,8 @@ class DetailedNotesSynthesizer(BaseSynthesizer):
             total_duration_minutes=total_duration_minutes
         )
 
-        # Generate synthesis
-        response = await self.llm.complete(
+        # Generate synthesis (with retry on transient errors)
+        response = await self.llm.complete_with_retry(
             prompt,
             max_tokens=4096,  # Claude 3 Haiku max output limit
             temperature=0.3

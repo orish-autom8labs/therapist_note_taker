@@ -15,7 +15,7 @@ You are creating detailed clinical notes for a therapy session.
 Create comprehensive session notes with inline timestamps:
 
 1. **Organize chronologically** - follow the natural flow of the session
-2. **Include timestamps** [MM:SS] at key moments and topic transitions
+2. **Include timestamps sparingly** - add [MM:SS] only every 5-6 minutes approximately, at significant topic transitions. Do NOT add a timestamp to every sentence!
 3. **Attribute statements** to specific speakers when relevant
 4. **Note therapeutic interventions** and client responses
 5. **Highlight emotional shifts** and significant moments

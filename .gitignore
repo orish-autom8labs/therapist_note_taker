@@ -34,6 +34,14 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 
+# Python
+__pycache__/
+*.pyc
+server/venv/
+
+# Claude Code
+.claude/plans/
+
 # Testing
 coverage/
 

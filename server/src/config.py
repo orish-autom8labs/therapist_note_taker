@@ -122,6 +122,14 @@ class SummarizationConfig:
     max_cost_per_session_usd: float = float(os.getenv('SUMMARIZATION_MAX_COST_USD', '0.50'))
 
 
+class FirestoreConfig:
+    """Firestore configuration for session metadata tracking."""
+    enabled: bool = os.getenv('FIRESTORE_ENABLED', 'false').lower() == 'true'
+    project_id: str = os.getenv('GCP_PROJECT_ID', 'therapistnottaker')
+    encryption_key: str = os.getenv('FIRESTORE_ENCRYPTION_KEY', '')
+    collection_prefix: str = os.getenv('FIRESTORE_COLLECTION_PREFIX', 'prod')
+
+
 class Config:
     """Main configuration class."""
     server: ServerConfig = ServerConfig()
@@ -130,6 +138,7 @@ class Config:
     autosave: AutosaveConfig = AutosaveConfig()
     email: EmailConfig = EmailConfig()
     summarization: SummarizationConfig = SummarizationConfig()
+    firestore: FirestoreConfig = FirestoreConfig()
 
 
 # Global config instance

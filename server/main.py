@@ -18,6 +18,7 @@ from src.services.transcription_service import TranscriptionService
 from src.services.drive_service import DriveService
 from src.services.email_service import EmailService
 from src.services.summarization import SummarizationService, SummaryStyle
+from src.services.firestore_service import FirestoreService
 
 app = FastAPI(title="Note Taker API")
 
@@ -27,7 +28,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:3001",
-        "https://note-taker-frontend-1049928242674.us-central1.run.app"
+        "https://note-taker-frontend-1049928242674.us-central1.run.app",
+        "https://staging---note-taker-frontend-1049928242674.us-central1.run.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -47,6 +49,16 @@ if config.summarization.enabled:
     except Exception as e:
         print(f'[SUMMARIZATION] Failed to initialize service: {e}')
         summarization_service = None
+
+# Initialize Firestore service (only if enabled)
+firestore_service: Optional[FirestoreService] = None
+if config.firestore.enabled:
+    try:
+        firestore_service = FirestoreService()
+        print(f'[FIRESTORE] Service initialized - collection prefix: {config.firestore.collection_prefix}')
+    except Exception as e:
+        print(f'[FIRESTORE] Failed to initialize service: {e}')
+        firestore_service = None
 
 # Helper function to create DriveService with user tokens
 def create_drive_service_with_tokens(access_token: str, refresh_token: str) -> DriveService:
@@ -169,9 +181,17 @@ async def run_summarization_background(
     """
     Run summarization in the background after transcript save completes.
     This function NEVER raises exceptions - all errors are logged and saved to Drive.
+    Updates Firestore status through the lifecycle.
     """
     try:
         print(f'[SUMMARIZATION] Starting background summarization for session {session_id}...')
+
+        # Update Firestore: status = "summarizing"
+        if firestore_service:
+            try:
+                await firestore_service.set_summarizing(session_id)
+            except Exception as fs_err:
+                print(f'[FIRESTORE] Failed to set summarizing status: {fs_err}')
 
         # Get session start time from first token
         timestamps = [c.get('timestamp') for c in buffer if c.get('timestamp')]
@@ -187,7 +207,17 @@ async def run_summarization_background(
         # Save summary to Drive (separate file)
         if summary_result.success and summary_result.content:
             summary_file_name = f"{patient_name}_{date_str}_{time_str}_Summary.txt"
-            summary_content = f"""{'═' * 50}
+            folder_path = f'Clinic/Transcripts/{patient_name}'
+
+            # Check for duplicate summary before creating
+            existing_summaries = await drive_service.find_files_by_name(
+                summary_file_name, folder_path
+            )
+            if existing_summaries:
+                print(f'[SUMMARIZATION] Summary already exists, skipping duplicate: {summary_file_name}')
+                summary_file_info = existing_summaries[0]
+            else:
+                summary_content = f"""{'═' * 50}
 SESSION SUMMARY
 {'═' * 50}
 
@@ -206,30 +236,73 @@ Stage 1: {config.summarization.stage1_provider}/{config.summarization.stage1_mod
 Stage 2: {config.summarization.stage2_provider}/{config.summarization.stage2_model}
 {'═' * 50}
 """
-            await drive_service.save_transcript(
-                summary_content,
-                summary_file_name,
-                f'Clinic/Transcripts/{patient_name}'
-            )
+                summary_file_info = await drive_service.save_transcript(
+                    summary_content,
+                    summary_file_name,
+                    folder_path
+                )
             print(f'[SUMMARIZATION] Summary saved: {summary_file_name} (cost: ${summary_result.total_cost_usd:.4f})')
 
+            # Update Firestore: status = "completed" with summary links
+            if firestore_service and summary_file_info:
+                try:
+                    await firestore_service.set_completed(
+                        session_id,
+                        summary_info=summary_file_info,
+                        cost_usd=summary_result.total_cost_usd,
+                    )
+                    print(f'[FIRESTORE] Session {session_id} marked as completed')
+                except Exception as fs_err:
+                    print(f'[FIRESTORE] Failed to set completed status: {fs_err}')
+
         elif not summary_result.success and summary_result.error_report:
-            # Save error report to Drive for debugging
+            # Save error report to Drive for debugging (max 1 per session: overwrite existing)
             error_file_name = f"{patient_name}_{date_str}_{time_str}_Summary_ERROR.txt"
+            folder_path = f'Clinic/Transcripts/{patient_name}'
             try:
-                await drive_service.save_transcript(
-                    summary_result.error_report,
-                    error_file_name,
-                    f'Clinic/Transcripts/{patient_name}'
+                existing_errors = await drive_service.find_files_by_name(
+                    error_file_name, folder_path
                 )
-                print(f'[SUMMARIZATION] Error report saved: {error_file_name}')
+                if existing_errors:
+                    # Overwrite the existing error file
+                    await drive_service.update_file(
+                        existing_errors[0]['file_id'],
+                        summary_result.error_report
+                    )
+                    print(f'[SUMMARIZATION] Error report updated (overwritten): {error_file_name}')
+                else:
+                    await drive_service.save_transcript(
+                        summary_result.error_report,
+                        error_file_name,
+                        folder_path
+                    )
+                    print(f'[SUMMARIZATION] Error report saved: {error_file_name}')
             except Exception as save_error:
                 print(f'[SUMMARIZATION] Failed to save error report: {save_error}')
+
+            # Update Firestore: status = "summarization_failed"
+            if firestore_service:
+                try:
+                    error_msg = summary_result.error_report[:500] if summary_result.error_report else "Unknown error"
+                    await firestore_service.set_failed(session_id, error_msg)
+                except Exception as fs_err:
+                    print(f'[FIRESTORE] Failed to set failed status: {fs_err}')
 
     except Exception as summary_error:
         # Log error but NEVER propagate
         print(f'[SUMMARIZATION] Error during background summarization: {summary_error}')
         print(f'[SUMMARIZATION] Traceback: {traceback.format_exc()}')
+
+        # Update Firestore: status = "summarization_failed"
+        if firestore_service:
+            try:
+                await firestore_service.set_failed(
+                    session_id,
+                    f"{type(summary_error).__name__}: {str(summary_error)[:300]}"
+                )
+            except Exception as fs_err:
+                print(f'[FIRESTORE] Failed to set failed status: {fs_err}')
+
         # Try to save error report
         try:
             error_report = f"""
@@ -329,8 +402,32 @@ async def save_transcript(
         if transcript_update.is_final:
             # Final save
             try:
+                # ═══════════════════════════════════════════════════════════
+                # IDEMPOTENCY CHECK: If session already exists in Firestore, return existing data
+                # ═══════════════════════════════════════════════════════════
+                if firestore_service:
+                    try:
+                        existing = await firestore_service.get_session(session_id)
+                        if existing:
+                            print(f'[IDEMPOTENCY] Session {session_id} already exists in Firestore, returning existing data')
+                            transcript_info = existing.get("transcript", {})
+                            response = {
+                                "status": "success",
+                                "sessionId": session_id,
+                                "fileInfo": {
+                                    "id": transcript_info.get("drive_file_id"),
+                                    "name": transcript_info.get("drive_file_name"),
+                                    "web_view_link": transcript_info.get("web_view_link"),
+                                },
+                            }
+                            if refreshed_tokens:
+                                response["refreshedTokens"] = refreshed_tokens
+                            return response
+                    except Exception as fs_err:
+                        print(f'[FIRESTORE] Idempotency check failed (non-blocking): {fs_err}')
+
                 file_name = f"{patient_name}_{date_str}_{time_str}.txt"
-                
+
                 # If we have a temp file, update it; otherwise create new
                 if session.get('drive_file_id'):
                     # Update existing temp file
@@ -368,6 +465,34 @@ async def save_transcript(
                     except Exception as email_error:
                         print(f'[EMAIL] Failed to send notification: {email_error}')
                         # Don't fail the save operation if email fails
+
+                # ═══════════════════════════════════════════════════════════════════
+                # FIRESTORE: Create session document after transcript saved
+                # ═══════════════════════════════════════════════════════════════════
+                if firestore_service:
+                    try:
+                        # Calculate metadata from transcript buffer
+                        token_count = len(session['transcript_buffer'])
+                        timestamps = [c.get('timestamp') for c in session['transcript_buffer'] if c.get('timestamp')]
+                        duration_minutes = 0
+                        if len(timestamps) >= 2:
+                            duration_minutes = int((max(timestamps) - min(timestamps)) / 60_000)
+
+                        await firestore_service.create_session(
+                            session_id=session_id,
+                            user_email="",  # We don't have email from tokens; could add later
+                            patient_name=patient_name,
+                            transcript_info=file_info,
+                            refresh_token=transcript_update.refreshToken,
+                            metadata={
+                                "duration_minutes": duration_minutes,
+                                "token_count": token_count,
+                                "language": "he",  # Default; detected during summarization
+                            },
+                        )
+                        print(f'[FIRESTORE] Session {session_id} created with status=transcript_saved')
+                    except Exception as fs_err:
+                        print(f'[FIRESTORE] Failed to create session doc (non-blocking): {fs_err}')
 
                 # ═══════════════════════════════════════════════════════════════════
                 # DIAGNOSTIC INFO (Save if stall events detected)
@@ -449,6 +574,7 @@ Please share this file when reporting transcription issues.
 
                 response = {
                     "status": "success",
+                    "sessionId": session_id,
                     "fileInfo": {
                         "id": file_info.get('file_id'),
                         "name": file_info.get('file_name'),
@@ -523,6 +649,54 @@ Please share this file when reporting transcription issues.
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/sessions/{session_id}/status")
+async def get_session_status(session_id: str):
+    """
+    Get session status for frontend polling.
+    Returns status, transcript link, summary links (if available).
+    """
+    if not firestore_service:
+        raise HTTPException(status_code=503, detail="Firestore not enabled")
+
+    try:
+        session = await firestore_service.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        transcript = session.get("transcript", {})
+        summaries = session.get("summaries", {})
+        summarization = session.get("summarization", {})
+
+        response: Dict[str, Any] = {
+            "sessionId": session_id,
+            "status": session.get("status", "unknown"),
+            "transcript": {
+                "webViewLink": transcript.get("web_view_link"),
+                "fileName": transcript.get("drive_file_name"),
+            },
+        }
+
+        # Include summary info if available
+        detailed_notes = summaries.get("detailed_notes")
+        if detailed_notes:
+            response["summary"] = {
+                "webViewLink": detailed_notes.get("web_view_link"),
+                "fileName": detailed_notes.get("drive_file_name"),
+            }
+
+        # Include error info if failed
+        if session.get("status") == "summarization_failed":
+            response["error"] = summarization.get("last_error", "Unknown error")
+            response["attempts"] = summarization.get("attempts", 0)
+
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f'[ERROR] Failed to get session status: {e}')
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def ms_to_timestamp(ms, session_start_ms = 0) -> str:
     """Convert milliseconds to MM:SS format relative to session start."""
     if ms is None:
@@ -570,25 +744,29 @@ def format_transcript(buffer: list) -> str:
     return output.strip()
 
 
-def format_transcript_with_timestamps(buffer: list, session_start_ms: int = None) -> str:
+def format_transcript_with_timestamps(buffer: list, session_start_ms: int = None, timestamp_interval_ms: int = 300000) -> str:
     """
-    Format transcript buffer with timestamps for each speaker turn.
+    Format transcript buffer with timestamps every ~5 minutes (not every speaker change).
 
     Output format:
-    00:02
+    [00:00]
     Speaker A
     Text from speaker A...
 
-    00:35
     Speaker B
     Text from speaker B...
+
+    [05:12]
+    Speaker A
+    Text continues...
 
     Args:
         buffer: List of transcript chunks with text, speaker, timestamp
         session_start_ms: Session start time in ms (for relative timestamps)
+        timestamp_interval_ms: Minimum interval between timestamps (default 5 minutes = 300000ms)
 
     Returns:
-        Formatted transcript string with timestamps
+        Formatted transcript string with sparse timestamps
     """
     if not buffer:
         return ""
@@ -601,6 +779,7 @@ def format_transcript_with_timestamps(buffer: list, session_start_ms: int = None
     output_lines = []
     current_speaker = None
     current_text = ""  # Accumulate text for current speaker
+    last_timestamp_ms = None  # Track when we last output a timestamp
 
     # Map speaker numbers to letters (Speaker 1 -> Speaker A, etc.)
     speaker_map = {}
@@ -632,9 +811,16 @@ def format_transcript_with_timestamps(buffer: list, session_start_ms: int = None
             if output_lines:
                 output_lines.append("")  # Blank line between speakers
 
-            # Add timestamp
-            timestamp_str = ms_to_timestamp(timestamp_ms, session_start_ms)
-            output_lines.append(timestamp_str)
+            # Add timestamp only if: first entry OR enough time has passed since last timestamp
+            should_add_timestamp = (
+                last_timestamp_ms is None or
+                (timestamp_ms - last_timestamp_ms) >= timestamp_interval_ms
+            )
+
+            if should_add_timestamp:
+                timestamp_str = ms_to_timestamp(timestamp_ms, session_start_ms)
+                output_lines.append(f"[{timestamp_str}]")
+                last_timestamp_ms = timestamp_ms
 
             # Add speaker name
             output_lines.append(f"Speaker {speaker_label}")

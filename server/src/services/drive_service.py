@@ -2,12 +2,15 @@
 Google Drive service for saving transcripts.
 """
 import os
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from ..config import config
+
+# Maximum content size for Drive uploads (500KB)
+MAX_CONTENT_SIZE_BYTES = 500_000
 
 
 class DriveService:
@@ -140,6 +143,54 @@ class DriveService:
         self._last_refreshed_tokens = None
         return tokens
     
+    async def find_files_by_name(
+        self,
+        file_name: str,
+        folder_path: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Find files by name in a specific folder.
+
+        Args:
+            file_name: File name to search for
+            folder_path: Folder path to search in
+
+        Returns:
+            List of matching file dicts with id, name, webViewLink
+        """
+        if not self.drive_service:
+            raise ValueError("User tokens not set. Call set_user_tokens() first.")
+
+        try:
+            folder_id = await self.find_or_create_folder(folder_path)
+            # Strip .txt for Google Docs name matching
+            search_name = file_name.replace('.txt', '')
+
+            query = (
+                f"name='{search_name}' and "
+                f"'{folder_id}' in parents and "
+                f"trashed=false"
+            )
+
+            results = self.drive_service.files().list(
+                q=query,
+                fields='files(id, name, webViewLink)',
+                spaces='drive'
+            ).execute()
+
+            files = results.get('files', [])
+            return [
+                {
+                    'file_id': f.get('id'),
+                    'file_name': f.get('name'),
+                    'web_view_link': f.get('webViewLink'),
+                }
+                for f in files
+            ]
+        except Exception as e:
+            print(f'[DRIVE] Error finding files by name: {e}')
+            return []
+
     async def save_transcript(
         self,
         content: str,
@@ -161,6 +212,12 @@ class DriveService:
         """
         if not self.drive_service:
             raise ValueError("User tokens not set. Call set_user_tokens() first.")
+
+        # Content size cap
+        content_bytes = content.encode('utf-8')
+        if len(content_bytes) > MAX_CONTENT_SIZE_BYTES:
+            print(f'[DRIVE] Content size {len(content_bytes)} exceeds {MAX_CONTENT_SIZE_BYTES} bytes, truncating')
+            content = content[:MAX_CONTENT_SIZE_BYTES // 2]  # Rough truncation (chars ~ bytes for ASCII)
 
         from io import BytesIO
         from googleapiclient.http import MediaIoBaseUpload
