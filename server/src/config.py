@@ -73,52 +73,117 @@ class EmailConfig:
     admin_email: str = os.getenv('ADMIN_EMAIL', '')
 
 
+class SummaryLevelConfig:
+    """Configuration for a single summary quality level."""
+    def __init__(
+        self,
+        name: str,
+        label_he: str,
+        use_chunking: bool,
+        use_structured_extraction: bool,
+        use_overlap: bool,
+        stage2_provider: str,
+        stage2_model: str,
+        stage2_styles: list,
+        use_verification: bool,
+        verification_provider: str = '',
+        verification_model: str = '',
+    ):
+        self.name = name
+        self.label_he = label_he
+        self.use_chunking = use_chunking
+        self.use_structured_extraction = use_structured_extraction
+        self.use_overlap = use_overlap
+        self.stage2_provider = stage2_provider
+        self.stage2_model = stage2_model
+        self.stage2_styles = stage2_styles
+        self.use_verification = use_verification
+        self.verification_provider = verification_provider
+        self.verification_model = verification_model
+
+
+# Pre-defined summary levels
+SUMMARY_LEVELS: dict[str, SummaryLevelConfig] = {
+    'quick': SummaryLevelConfig(
+        name='quick',
+        label_he='סיכום מהיר',
+        use_chunking=False,
+        use_structured_extraction=False,
+        use_overlap=False,
+        stage2_provider=os.getenv('SUMMARIZATION_STAGE1_PROVIDER', 'deepseek'),
+        stage2_model=os.getenv('SUMMARIZATION_STAGE1_MODEL', 'deepseek-chat'),
+        stage2_styles=['key_topics'],
+        use_verification=False,
+    ),
+    'standard': SummaryLevelConfig(
+        name='standard',
+        label_he='סיכום סטנדרטי',
+        use_chunking=True,
+        use_structured_extraction=True,
+        use_overlap=True,
+        stage2_provider=os.getenv('SUMMARIZATION_STAGE2_PROVIDER', 'claude'),
+        stage2_model=os.getenv('SUMMARIZATION_STAGE2_MODEL', 'claude-3-haiku-20240307'),
+        stage2_styles=['key_topics', 'detailed_notes'],
+        use_verification=False,
+    ),
+    'clinical': SummaryLevelConfig(
+        name='clinical',
+        label_he='סיכום קליני מאומת',
+        use_chunking=True,
+        use_structured_extraction=True,
+        use_overlap=True,
+        stage2_provider=os.getenv('SUMMARIZATION_STAGE2_PROVIDER', 'claude'),
+        stage2_model=os.getenv('SUMMARIZATION_STAGE2_MODEL', 'claude-3-haiku-20240307'),
+        stage2_styles=['key_topics', 'detailed_notes'],
+        use_verification=True,
+        verification_provider=os.getenv('SUMMARIZATION_STAGE3_PROVIDER', 'claude'),
+        verification_model=os.getenv('SUMMARIZATION_STAGE3_MODEL', 'claude-3-haiku-20240307'),
+    ),
+}
+
+
 class SummarizationConfig:
     """
     Summarization configuration.
 
-    Two-stage pipeline:
-    - Stage 1 (Chunking): Cheap model for summarizing transcript segments
+    Three-stage pipeline:
+    - Stage 1 (Extraction): Structured extraction from transcript chunks
     - Stage 2 (Synthesis): Quality model for final summary generation
+    - Stage 3 (Verification): Faithfulness check against extractions (Level 3 only)
 
     Change these settings to modify summarization behavior.
     """
 
-    # ═══════════════════════════════════════════════════════════════════
-    # MASTER SWITCH
-    # ═══════════════════════════════════════════════════════════════════
+    # Master switch
     enabled: bool = os.getenv('SUMMARIZATION_ENABLED', 'true').lower() == 'true'
 
-    # ═══════════════════════════════════════════════════════════════════
-    # STAGE 1: CHUNKING CONFIGURATION
-    # Change these lines to modify chunking behavior
-    # ═══════════════════════════════════════════════════════════════════
+    # Stage 1: Extraction
     stage1_provider: str = os.getenv('SUMMARIZATION_STAGE1_PROVIDER', 'deepseek')
     stage1_model: str = os.getenv('SUMMARIZATION_STAGE1_MODEL', 'deepseek-chat')
     stage1_approach: str = os.getenv('SUMMARIZATION_STAGE1_APPROACH', 'speaker_segments')
-    # Options: 'speaker_segments' (breaks at speaker changes, 3-8 min)
-    #          'fixed_time' (fixed intervals)
     stage1_chunk_minutes_min: int = int(os.getenv('SUMMARIZATION_CHUNK_MIN_MINUTES', '3'))
     stage1_chunk_minutes_max: int = int(os.getenv('SUMMARIZATION_CHUNK_MAX_MINUTES', '8'))
 
-    # ═══════════════════════════════════════════════════════════════════
-    # STAGE 2: SYNTHESIS CONFIGURATION
-    # Change these lines to modify synthesis behavior
-    # ═══════════════════════════════════════════════════════════════════
+    # Stage 2: Synthesis
     stage2_provider: str = os.getenv('SUMMARIZATION_STAGE2_PROVIDER', 'claude')
     stage2_model: str = os.getenv('SUMMARIZATION_STAGE2_MODEL', 'claude-3-haiku-20240307')
-    stage2_styles: list = ['key_topics', 'detailed_notes']  # Generate both styles
+    stage2_styles: list = ['key_topics', 'detailed_notes']
 
-    # ═══════════════════════════════════════════════════════════════════
-    # PROVIDER API KEYS (from environment)
-    # ═══════════════════════════════════════════════════════════════════
+    # Stage 3: Verification
+    stage3_provider: str = os.getenv('SUMMARIZATION_STAGE3_PROVIDER', 'claude')
+    stage3_model: str = os.getenv('SUMMARIZATION_STAGE3_MODEL', 'claude-3-haiku-20240307')
+
+    # Summary levels to generate (evaluation mode: all three)
+    summary_levels: list = os.getenv(
+        'SUMMARIZATION_LEVELS', 'quick,standard,clinical'
+    ).split(',')
+
+    # Provider API keys
     deepseek_api_key: str = os.getenv('DEEPSEEK_API_KEY', '')
     anthropic_api_key: str = os.getenv('ANTHROPIC_API_KEY', '')
     openai_api_key: str = os.getenv('OPENAI_API_KEY', '')
 
-    # ═══════════════════════════════════════════════════════════════════
-    # SAFETY LIMITS
-    # ═══════════════════════════════════════════════════════════════════
+    # Safety limits
     max_cost_per_session_usd: float = float(os.getenv('SUMMARIZATION_MAX_COST_USD', '0.50'))
 
 

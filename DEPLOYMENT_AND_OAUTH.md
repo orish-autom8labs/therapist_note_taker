@@ -1,241 +1,256 @@
-# OAuth, Deployment, and Customer Authentication Explained
+# Deployment Guide
 
-## How OAuth Works (The "O" Thing)
-
-### What is OAuth?
-OAuth is **delegated authorization** - customers log in with **their own Google account**, not with your app.
-
-### The Flow:
-```
-1. Customer clicks "Sign in with Google"
-2. Google shows login page (Google's website, not yours)
-3. Customer enters their Google credentials (Google handles this)
-4. Customer authorizes your app to access their Google Drive
-5. Google gives your app a temporary "access token"
-6. Your app uses this token to save files to customer's Drive
-```
-
-### Key Points:
-- ✅ **You NEVER see customer passwords** - Google handles all authentication
-- ✅ **You DON'T store login credentials** - only temporary tokens
-- ✅ **Each customer uses their own Google account** - no shared accounts
-- ✅ **Customer controls access** - they can revoke it anytime in Google settings
+This guide explains how to deploy the Note Taker application to Google Cloud Run.
 
 ---
 
-## What Customers Need
+## Production URLs
 
-### For Each Customer:
-1. **A Google account** (Gmail account)
-   - Most people already have one
-   - Free to create if they don't
-   - No special setup needed
-
-2. **First-time setup (one-time):**
-   - Click "Sign in with Google"
-   - Authorize the app to access their Drive
-   - That's it!
-
-### What You Store:
-- **Access tokens** (temporary, expire after hours/days)
-- **Refresh tokens** (to get new access tokens)
-- **NO passwords**
-- **NO personal data** (unless you choose to store session info)
+| Service | URL |
+|---------|-----|
+| Frontend | https://note-taker-frontend-1049928242674.us-central1.run.app |
+| Backend | https://note-taker-backend-1049928242674.us-central1.run.app |
+| Health Check | https://note-taker-backend-1049928242674.us-central1.run.app/health |
 
 ---
 
-## Deployment Options
+## Prerequisites
 
-### Option 1: Cloud Hosting (Recommended)
+### 1. Install Required Tools
 
-**Backend (Python/FastAPI):**
-- **Heroku** - Easy, free tier available
-- **Railway** - Simple deployment
-- **Render** - Free tier
-- **AWS/GCP/Azure** - More control, more setup
-- **DigitalOcean** - Good balance
+```bash
+# Google Cloud CLI
+brew install google-cloud-sdk
 
-**Frontend (React):**
-- **Vercel** - Excellent for React, free tier
-- **Netlify** - Easy deployment
-- **Same as backend** - Can host both together
-
-### Option 2: Self-Hosted
-- Customer runs on their own server
-- More control, more responsibility
-
----
-
-## Multi-Customer Architecture
-
-### Current Setup (Single OAuth App):
-```
-Your Google OAuth App
-    ↓
-All customers use same OAuth credentials
-    ↓
-Each customer authenticates with their own Google account
-    ↓
-Each customer's files go to their own Google Drive
+# Docker Desktop
+# Download from: https://www.docker.com/products/docker-desktop
 ```
 
-**This works!** Each customer:
-- Uses their own Google account
-- Gets their own Drive folder
-- Can't see other customers' files
+### 2. Authenticate with Google Cloud
 
-### What You Need to Change for Production:
+```bash
+# Login to Google Cloud
+gcloud auth login
 
-1. **Update Redirect URI:**
-   ```
-   Development: http://localhost:3001/auth/google/callback
-   Production:  https://yourdomain.com/auth/google/callback
-   ```
+# Set up application default credentials
+gcloud auth application-default login
 
-2. **Update CORS:**
-   ```python
-   # In main.py
-   allow_origins=[
-       "http://localhost:3000",  # Development
-       "https://yourdomain.com"  # Production
-   ]
-   ```
+# Set the project
+gcloud config set project therapistnottaker
+```
 
-3. **Environment Variables:**
-   - Set production URLs
-   - Use production database (if storing session data)
-   - Set up proper email service
+### 3. Verify Docker is Running
+
+Make sure Docker Desktop is running before deploying.
 
 ---
 
-## What You Store (Privacy & Security)
+## Quick Deployment Commands
 
-### Minimal Approach (Recommended):
+### Deploy Backend Only
+```bash
+./scripts/deploy_backend.sh
+```
+
+### Deploy Frontend Only
+```bash
+./scripts/deploy_frontend.sh
+```
+
+### Deploy Both (Backend First)
+```bash
+./scripts/deploy_backend.sh && ./scripts/deploy_frontend.sh
+```
+
+**Important:** Always deploy backend first if you've made backend changes, because the frontend build embeds the backend URL.
+
+---
+
+## What the Scripts Do
+
+### Backend Deployment (`scripts/deploy_backend.sh`)
+
+1. Builds Docker image from `server/Dockerfile`
+2. Pushes to Google Artifact Registry
+3. Deploys to Cloud Run with:
+   - 1GB memory, 1 CPU
+   - 300s timeout (for long summarization requests)
+   - Environment variables from `server/.env.yaml`
+
+### Frontend Deployment (`scripts/deploy_frontend.sh`)
+
+1. Builds Docker image from `client/Dockerfile`
+2. Injects `REACT_APP_API_URL` pointing to backend
+3. Pushes to Google Artifact Registry
+4. Deploys to Cloud Run with:
+   - 512MB memory, 1 CPU
+   - 60s timeout
+
+---
+
+## Environment Configuration
+
+### Backend Environment (`server/.env.yaml`)
+
+This file contains production secrets and is used during Cloud Run deployment:
+
+```yaml
+TRANSCRIPTION_PROVIDER: "soniox"
+NODE_ENV: "production"
+FRONTEND_URL: "https://note-taker-frontend-1049928242674.us-central1.run.app"
+SONIOX_API_KEY: "your-soniox-key"
+GOOGLE_CLIENT_ID: "your-google-client-id"
+GOOGLE_CLIENT_SECRET: "your-google-client-secret"
+GOOGLE_REDIRECT_URI: "https://note-taker-backend-1049928242674.us-central1.run.app/auth/google/callback"
+```
+
+**Note:** The `.env.yaml` file is gitignored. Keep it secure and never commit it.
+
+### Local Development (`server/.env`)
+
+For local development, use the `.env` file with localhost URLs:
+
+```bash
+GOOGLE_REDIRECT_URI=http://localhost:3001/auth/google/callback
+FRONTEND_URL=http://localhost:3000
+```
+
+---
+
+## Troubleshooting
+
+### Authentication Errors
+
+If you see `UNAUTHENTICATED` or `unauthorized: authentication failed`:
+
+```bash
+# Re-authenticate
+gcloud auth login
+gcloud auth application-default login
+
+# Reconfigure Docker
+gcloud auth configure-docker us-central1-docker.pkg.dev
+```
+
+### Docker Build Fails
+
+```bash
+# Make sure Docker Desktop is running
+# Check Docker status
+docker info
+
+# If on Mac with Apple Silicon, the scripts already use --platform linux/amd64
+```
+
+### Cloud Run Deployment Fails
+
+```bash
+# Check logs
+gcloud run services logs read note-taker-backend --region=us-central1
+
+# Check service status
+gcloud run services describe note-taker-backend --region=us-central1
+```
+
+### CORS Errors in Browser
+
+The backend CORS is configured in `server/main.py`. Ensure the frontend URL is in the allowed origins:
+
 ```python
-# Per session (temporary):
-- Access token (expires in ~1 hour)
-- Refresh token (to get new access tokens)
-- Session ID
-- Patient name (from user input)
-- Transcript (temporary, until saved to Drive)
-
-# After session ends:
-- Delete everything except refresh token (optional)
-- Transcript is in customer's Drive (not your server)
+allow_origins=[
+    "http://localhost:3000",
+    "https://note-taker-frontend-1049928242674.us-central1.run.app"
+]
 ```
-
-### What You DON'T Store:
-- ❌ Passwords
-- ❌ Google account credentials
-- ❌ Permanent transcripts (they're in customer's Drive)
-- ❌ Personal information (unless required)
-
----
-
-## Customer Experience
-
-### First Time:
-1. Customer visits your app
-2. Clicks "Sign in with Google"
-3. Google login page appears
-4. Customer logs in with their Google account
-5. Google asks: "Allow Note Taker to access your Google Drive?"
-6. Customer clicks "Allow"
-7. Redirected back to your app
-8. Ready to use!
-
-### Subsequent Visits:
-1. Customer visits your app
-2. Clicks "Sign in with Google"
-3. If already logged into Google → instant redirect
-4. If not → Google login page → then redirect
-5. Ready to use!
-
-**No account creation needed** - Google account is their account.
 
 ---
 
 ## Deployment Checklist
 
-### Before Going Live:
+### Before Deploying
 
-1. **Google OAuth:**
-   - [ ] Create production OAuth credentials
-   - [ ] Add production redirect URI
-   - [ ] Update `.env` with production credentials
+- [ ] Docker Desktop is running
+- [ ] Authenticated with `gcloud auth login`
+- [ ] `server/.env.yaml` has correct production values
+- [ ] Code changes are tested locally
 
-2. **Domain & HTTPS:**
-   - [ ] Get domain name
-   - [ ] Set up SSL certificate (HTTPS required for OAuth)
-   - [ ] Update CORS with production domain
+### After Deploying
 
-3. **Environment:**
-   - [ ] Set `NODE_ENV=production`
-   - [ ] Use production database (if storing data)
-   - [ ] Set up production email service
-
-4. **Security:**
-   - [ ] Review what data you store
-   - [ ] Set up proper error logging
-   - [ ] Configure rate limiting
-   - [ ] Set up monitoring
-
-5. **Testing:**
-   - [ ] Test OAuth flow in production
-   - [ ] Test Drive file saving
-   - [ ] Test email notifications
-   - [ ] Test transcription
+- [ ] Visit frontend URL and verify it loads
+- [ ] Check backend health: `curl https://note-taker-backend-1049928242674.us-central1.run.app/health`
+- [ ] Test Google OAuth login flow
+- [ ] Test a short recording session
+- [ ] Verify transcript saves to Google Drive
 
 ---
 
-## Architecture Options
+## Google Cloud Console
 
-### Option A: Current (Simple)
-- Single OAuth app
-- All customers use same OAuth credentials
-- Each customer authenticates with their own Google account
-- **Pros:** Simple, works immediately
-- **Cons:** All customers see same OAuth consent screen
+- **Project:** therapistnottaker
+- **Region:** us-central1
+- **Console URL:** https://console.cloud.google.com/run?project=therapistnottaker
 
-### Option B: Multi-Tenant (Advanced)
-- Each customer gets their own OAuth app
-- More complex setup
-- **Pros:** Custom branding per customer
-- **Cons:** Much more complex, probably overkill
+---
 
-**Recommendation:** Start with Option A. It works perfectly for your use case.
+## OAuth Configuration
+
+### How OAuth Works
+
+OAuth allows customers to log in with their Google account. You never see their password.
+
+```
+1. Customer clicks "Sign in with Google"
+2. Google shows login page (Google's website)
+3. Customer enters their Google credentials
+4. Customer authorizes your app to access their Google Drive
+5. Google gives your app a temporary access token
+6. Your app uses this token to save files to customer's Drive
+```
+
+### Google Cloud Console OAuth Setup
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials?project=therapistnottaker)
+2. Under "OAuth 2.0 Client IDs", click on the web client
+3. Ensure these redirect URIs are configured:
+   - `http://localhost:3001/auth/google/callback` (development)
+   - `https://note-taker-backend-1049928242674.us-central1.run.app/auth/google/callback` (production)
+
+### What Data is Stored
+
+- **Access tokens** - temporary, expire in ~1 hour
+- **Refresh tokens** - to get new access tokens
+- **NO passwords** - Google handles authentication
+- **Transcripts** - temporarily, then saved to customer's Google Drive
 
 ---
 
 ## Cost Considerations
 
-### For You:
-- **OAuth:** Free (Google doesn't charge)
-- **Hosting:** 
-  - Free tier: Heroku/Railway/Render (limited)
-  - Paid: $5-20/month for small scale
-- **Transcription:** 
-  - Soniox: Pay per minute transcribed
-  - Google: Pay per minute transcribed
-
-### For Customers:
-- **Google account:** Free
-- **Google Drive storage:** Free (15GB), or paid if they need more
-- **Your app:** Depends on your pricing model
+| Service | Cost |
+|---------|------|
+| Google Cloud Run | Pay per request (~$0-5/month for low usage) |
+| Google OAuth | Free |
+| Soniox Transcription | Pay per minute transcribed |
+| Google Drive Storage | Free 15GB per user |
 
 ---
 
-## Summary
+## Architecture Overview
 
-**OAuth = Customers log in with Google, you never see passwords**
-
-**Deployment = Host on cloud (Heroku/Railway/Vercel), update URLs**
-
-**Storage = Only temporary tokens, transcripts go to customer's Drive**
-
-**Customer Setup = Just need Google account, one-time authorization**
-
-**You're ready to deploy!** The current architecture works for production - just update URLs and deploy.
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Browser (React)                                            │
+│  └── Cloud Run: note-taker-frontend                        │
+└─────────────────────────┬───────────────────────────────────┘
+                          │ REST API
+┌─────────────────────────▼───────────────────────────────────┐
+│  FastAPI Backend                                            │
+│  └── Cloud Run: note-taker-backend                         │
+│      ├── /v1/auth/temporary-api-key → Soniox               │
+│      ├── /auth/google/* → Google OAuth                     │
+│      └── /api/sessions/*/transcript → Google Drive         │
+└─────────────────────────────────────────────────────────────┘
+```
 
 
 

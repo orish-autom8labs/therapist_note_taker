@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 
 function SessionSetup({ user, onStart, onBack }) {
   const [patientName, setPatientName] = useState('');
+  const [includeTimestamps, setIncludeTimestamps] = useState(false);
 
   const handleStart = () => {
     if (!patientName.trim()) {
@@ -11,6 +12,7 @@ function SessionSetup({ user, onStart, onBack }) {
 
     onStart({
       patientName: patientName.trim(),
+      includeTimestamps,
       user,
     });
   };
@@ -42,6 +44,23 @@ function SessionSetup({ user, onStart, onBack }) {
       }}>
         📁 Save to: <strong>Clinic/Transcripts/{patientName.trim() || 'PatientName'}</strong>
       </div>
+
+      <label style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '10px',
+        marginBottom: '20px',
+        fontSize: '14px',
+        cursor: 'pointer',
+      }}>
+        <input
+          type="checkbox"
+          checked={includeTimestamps}
+          onChange={(e) => setIncludeTimestamps(e.target.checked)}
+          style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+        />
+        זמנים תכופים בתמלול (כל 1-2 דקות)
+      </label>
 
       {/* Important Instructions for Screen Lock */}
       <div style={{

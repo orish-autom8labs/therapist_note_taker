@@ -9,12 +9,34 @@ from ....providers.llm import LLMProvider
 
 @dataclass
 class ChunkSummary:
-    """Summary of a single transcript chunk."""
+    """Summary of a single transcript chunk (structured extraction)."""
     summary: str
     key_points: List[str]
     start_timestamp: str
     end_timestamp: str
     speakers: List[str]
+    # Structured extraction fields (populated by new extraction prompt)
+    raw_extraction: str = ""        # Full raw extraction text for verification
+    topics: List[str] = None        # type: ignore[assignment]
+    emotions: List[str] = None      # type: ignore[assignment]
+    therapeutic_moments: List[str] = None  # type: ignore[assignment]
+    significant_quotes: List[str] = None   # type: ignore[assignment]
+    factual_details: List[str] = None      # type: ignore[assignment]
+    action_items: List[str] = None         # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.topics is None:
+            self.topics = []
+        if self.emotions is None:
+            self.emotions = []
+        if self.therapeutic_moments is None:
+            self.therapeutic_moments = []
+        if self.significant_quotes is None:
+            self.significant_quotes = []
+        if self.factual_details is None:
+            self.factual_details = []
+        if self.action_items is None:
+            self.action_items = []
 
 
 @dataclass
@@ -41,7 +63,8 @@ class BaseSynthesizer(ABC):
         self,
         llm_provider: LLMProvider,
         prompt_loader: 'PromptLoader',
-        language: str = 'en'
+        language: str = 'en',
+        patient_name: str = 'Unknown'
     ):
         """
         Initialize synthesizer.
@@ -50,10 +73,12 @@ class BaseSynthesizer(ABC):
             llm_provider: LLM provider for generating summaries
             prompt_loader: Loader for prompt templates
             language: Language code ('en' or 'he')
+            patient_name: Patient name for personalized summaries
         """
         self.llm = llm_provider
         self.prompt_loader = prompt_loader
         self.language = language
+        self.patient_name = patient_name
 
     @abstractmethod
     def get_style_name(self) -> str:
@@ -158,22 +183,30 @@ class BaseSynthesizer(ABC):
         self,
         chunk_summaries: List[ChunkSummary]
     ) -> str:
-        """Format chunk summaries for the synthesis prompt."""
+        """Format chunk summaries for the synthesis prompt.
+
+        Uses structured extraction data when available,
+        falls back to legacy key_points format.
+        """
         parts = []
 
         for i, chunk in enumerate(chunk_summaries, 1):
-            speakers_str = ', '.join(chunk.speakers) if chunk.speakers else 'Unknown'
-            points_str = '\n'.join(f'  - {p}' for p in chunk.key_points)
+            speakers_str = ', '.join(chunk.speakers) if chunk.speakers else 'לא ידוע'
 
-            part = f"""
-## Chunk {i} ({chunk.start_timestamp} - {chunk.end_timestamp})
-Speakers: {speakers_str}
+            # If we have raw extraction text (new structured format), use it directly
+            if chunk.raw_extraction:
+                part = f"## קטע {i} ({chunk.start_timestamp} - {chunk.end_timestamp})\n\n{chunk.raw_extraction}"
+            else:
+                # Legacy format fallback
+                points_str = '\n'.join(f'  - {p}' for p in chunk.key_points)
+                part = f"""## קטע {i} ({chunk.start_timestamp} - {chunk.end_timestamp})
+דוברים: {speakers_str}
 
-Key Points:
+נקודות מפתח:
 {points_str}
 
-Summary: {chunk.summary}
-"""
+סיכום: {chunk.summary}"""
+
             parts.append(part.strip())
 
         return '\n\n'.join(parts)

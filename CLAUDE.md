@@ -38,7 +38,10 @@ cd client && npm start
 │  ├── /auth/google/* → OAuth flow                           │
 │  ├── /api/sessions/*/transcript → Save to Drive + Firestore│
 │  ├── /api/sessions/*/status → Summary polling endpoint     │
-│  └── Background: LLM Summarization with retry (2s→4s→8s)  │
+│  └── Background: 3-stage LLM Summarization with retry      │
+│      Stage 1: Structured extraction (DeepSeek, parallel)    │
+│      Stage 2: Synthesis (Claude Haiku/Sonnet)               │
+│      Stage 3: Faithfulness verification (Level 3 only)      │
 ├─────────────────────────────────────────────────────────────┤
 │  Google Cloud Firestore (metadata only)                     │
 │  └── {prefix}_sessions/{id} → status, Drive IDs, costs     │
@@ -66,12 +69,26 @@ cd client && npm start
 | File | Purpose |
 |------|---------|
 | `server/main.py` | FastAPI endpoints + Firestore integration |
-| `server/src/config.py` | Configuration (incl. FirestoreConfig) |
+| `server/src/config.py` | Configuration (incl. FirestoreConfig, SummaryLevelConfig) |
 | `server/src/providers/soniox_provider.py` | Soniox temp API key generation |
 | `server/src/services/drive_service.py` | Google Drive operations |
 | `server/src/services/firestore_service.py` | Firestore CRUD, encrypted token storage |
-| `server/src/services/summarization/` | Two-stage LLM pipeline |
+| `server/src/services/summarization/` | Three-stage LLM pipeline (extraction → synthesis → verification) |
+| `server/src/services/summarization/synthesis/verification.py` | Stage 3 faithfulness verifier |
 | `server/src/providers/llm/retry.py` | Exponential backoff retry logic |
+
+### Summarization Prompts (Hebrew only)
+| File | Purpose |
+|------|---------|
+| `server/src/prompts/summarization/chunk_extraction_he.md` | Stage 1: Structured extraction with quote-grounding |
+| `server/src/prompts/summarization/key_topics_he.md` | Stage 2: Key topics synthesis |
+| `server/src/prompts/summarization/detailed_notes_he.md` | Stage 2: Detailed notes synthesis |
+| `server/src/prompts/summarization/verification_he.md` | Stage 3: Faithfulness verification |
+
+### Offline Tools
+| File | Purpose |
+|------|---------|
+| `scripts/run_summary.py` | Offline CLI for running summaries on transcript files |
 
 ### Summary Polling (Client-Side)
 | File | Purpose |
@@ -113,8 +130,8 @@ GOOGLE_CLIENT_SECRET=xxx     # OAuth
 
 ### Optional (Summarization)
 ```bash
-DEEPSEEK_API_KEY=xxx         # Stage 1 - chunking
-ANTHROPIC_API_KEY=xxx        # Stage 2 - synthesis
+DEEPSEEK_API_KEY=xxx         # Stage 1 - structured extraction
+ANTHROPIC_API_KEY=xxx        # Stage 2 - synthesis, Stage 3 - verification
 SUMMARIZATION_ENABLED=true   # Enable/disable
 ```
 
@@ -139,19 +156,30 @@ FIRESTORE_COLLECTION_PREFIX=prod      # "prod" or "staging"
 - NOT caused by 60-second API key expiry (disproven)
 - Reconnection logic added as proactive fix
 
-### Summarization Pipeline (WORKING)
-- Two-stage: DeepSeek (chunking) → Claude Haiku (synthesis)
-- Max 4096 output tokens (Haiku limit)
+### Summarization Pipeline (UPGRADING)
+- Three-stage pipeline with 3 quality levels (Quick/Standard/Clinical)
+- Stage 1: Structured extraction with quote-grounding (DeepSeek)
+- Stage 2: Anti-hallucination synthesis (Claude Haiku or Sonnet)
+- Stage 3: Faithfulness verification against extractions (Level 3 only)
+- All prompts Hebrew-only, patient name used throughout
+- Evaluation mode: all 3 levels in one document
+- Future: level tied to subscription tier
 - Retry logic: 2s → 4s → 8s backoff on transient errors
-- Firestore tracks status: transcript_saved → summarizing → completed/failed
-- Frontend polls for status and shows "View Summary" button
+- Firestore tracks status + costs (costs never shown to therapist)
 - See `server/SUMMARIZATION.md` for details
 
 ### Staging Environment
-- Deploy: `./scripts/deploy_backend_staging.sh` + `./scripts/deploy_frontend_staging.sh`
-- Promote: `./scripts/promote_staging.sh`
+- Deploy: `bash scripts/deploy_backend_staging.sh` + `bash scripts/deploy_frontend_staging.sh`
+- Promote: `bash scripts/promote_staging.sh`
 - Uses Cloud Run revision tags (--no-traffic --tag staging)
 - Firestore isolation via collection prefix (staging vs prod)
+
+### Hebrew-First Formatting (IMPLEMENTED)
+- Speaker labels: דובר א׳, דובר ב׳ (Hebrew letters, not English)
+- Compact transcript: no blank lines between speakers
+- Timestamps always present, checkbox controls frequency (1-2 min vs 5 min)
+- RTL-friendly: no decorative `═══` lines (break alignment in Google Docs)
+- Headers, dates, all output in Hebrew
 
 ## Console Log Prefixes
 

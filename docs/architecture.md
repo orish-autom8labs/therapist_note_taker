@@ -16,8 +16,9 @@ Note Taker is a therapy session note-taking application that provides real-time 
 | Storage | Google Drive (via OAuth) | Transcripts and summaries as Google Docs |
 | Metadata | Google Cloud Firestore | Session tracking, job status, cost tracking |
 | Transcription | Soniox (real-time, WebSocket) | Speech-to-text with speaker diarization |
-| LLM - Stage 1 | DeepSeek | Chunk-level transcript summarization |
-| LLM - Stage 2 | Claude Haiku (Anthropic) | Final synthesis of detailed notes and key topics |
+| LLM - Stage 1 | DeepSeek | Structured extraction from transcript chunks |
+| LLM - Stage 2 | Claude Haiku or Sonnet (Anthropic) | Synthesis of detailed notes and key topics |
+| LLM - Stage 3 | Claude Haiku (Anthropic) | Faithfulness verification (Level 3 only) |
 
 ---
 
@@ -77,23 +78,49 @@ Note Taker is a therapy session note-taking application that provides real-time 
 
 ## LLM Summarization Pipeline
 
-The pipeline is implemented in `server/src/services/summarization/` and follows a two-stage architecture designed to handle long therapy session transcripts cost-effectively.
+The pipeline is implemented in `server/src/services/summarization/` and follows a three-stage architecture with configurable quality levels.
 
-### Stage 1: Chunking (DeepSeek)
+### Summary Levels
 
-- The transcript is split into chunks using one of two strategies:
-  - **Speaker segment chunker**: Groups by speaker turns (preferred for therapy sessions).
-  - **Fixed time chunker**: Splits at fixed time intervals (fallback).
-- Each chunk is summarized independently via DeepSeek, enabling parallel processing.
-- The prompt is language-aware (Hebrew or English, auto-detected).
+| Level | Name | Stages | Stage 2 Model | Cost | Latency |
+|-------|------|--------|---------------|------|---------|
+| 1 | Quick | Stage 2 only (single pass) | DeepSeek | ~$0.001 | ~3s |
+| 2 | Standard | Stage 1 + Stage 2 | Claude Haiku | ~$0.005 | ~12s |
+| 3 | Clinical | Stage 1 + Stage 2 + Stage 3 | Claude Sonnet | ~$0.012 | ~20s |
 
-### Stage 2: Synthesis (Claude Haiku)
+During evaluation, all 3 levels are generated and combined into one document. In production, the level is determined by the user's subscription tier.
 
-- Chunk summaries from Stage 1 are combined into a single context.
-- Claude Haiku generates two output types:
-  - **Detailed notes**: Structured therapy session notes.
-  - **Key topics**: High-level topic extraction.
-- Maximum output: 4096 tokens (Haiku limit).
+### Stage 1: Structured Extraction (DeepSeek, parallel)
+
+- The transcript is split into chunks using speaker-segment chunking (3-8 min chunks with overlap).
+- Each chunk undergoes **structured extraction** (not generic summarization):
+  - Speakers present and their roles
+  - Topics discussed
+  - Emotions expressed (with exact quotes as evidence)
+  - Therapeutic moments
+  - Significant quotes
+  - Factual details (names, relationships, events)
+- Quote-grounding: every claim must cite an exact quote from the transcript.
+- Chain-of-thought self-check at the end of extraction.
+- All chunks processed in parallel.
+- Prompts are Hebrew-only.
+
+### Stage 2: Synthesis (Claude Haiku or Sonnet)
+
+- Structured extractions from Stage 1 are combined into a single context.
+- Generates two output types:
+  - **Key Topics**: Percentage-based topic breakdown.
+  - **Detailed Notes**: Comprehensive chronological clinical notes with timestamps.
+- Anti-hallucination instructions: only state what's in the extractions, use patient's own words for emotions, don't name techniques unless explicitly mentioned.
+- Uses patient's actual name throughout (not generic "the patient").
+- All output in Hebrew.
+
+### Stage 3: Faithfulness Verification (Claude Haiku, Level 3 only)
+
+- Compares Stage 2 draft against Stage 1 structured extractions.
+- Evaluates on a rubric: completeness, faithfulness, conciseness.
+- Outputs a **corrected final summary** (not just an evaluation score).
+- Removes ungrounded claims, adds omitted facts, fixes speaker attributions.
 
 ### Retry and Error Handling
 
@@ -179,10 +206,29 @@ The collection prefix is environment-specific (`prod`, `staging`) to isolate dat
 
 ---
 
+## Offline Summary CLI Tool
+
+`scripts/run_summary.py` enables running summarization on existing transcript files without a live session. Used for:
+- Iterating on prompts without needing real sessions
+- A/B testing different summary level configurations
+- Validating improvements against psychologist annotations
+- Re-processing old transcripts with updated pipeline
+
+```bash
+python scripts/run_summary.py --transcript path/to/file.txt --patient "שם" --all-levels
+python scripts/run_summary.py --transcript path/to/file.txt --patient "שם" --level clinical
+```
+
+---
+
 ## Key Design Decisions
 
 1. **Client-side transcription**: The Soniox SDK runs in the browser, so audio never touches the backend. This minimizes latency and strengthens privacy.
 2. **Google Drive as storage**: Therapists own their data. No central database of patient transcripts exists.
-3. **Two-stage LLM pipeline**: DeepSeek handles high-volume chunk summarization cheaply; Claude Haiku produces the final polished output. This balances cost and quality.
+3. **Three-stage LLM pipeline**: Structured extraction (DeepSeek, cheap) → synthesis (Claude, quality) → faithfulness verification (Claude). Balances cost, quality, and accuracy.
 4. **Firestore for metadata only**: Firestore tracks session status and Drive pointers but never stores clinical content.
 5. **Background summarization**: Summarization runs asynchronously after transcript save, so the therapist is never blocked waiting for LLM processing.
+6. **Hebrew-only prompts**: The app serves Hebrew-speaking therapists. All prompts are maintained in Hebrew only to reduce maintenance overhead.
+7. **Quote-grounding in extraction**: Stage 1 requires exact quotes as evidence for every claim, making the pipeline self-grounding without extra LLM calls.
+8. **Rubric-based framework**: The same quality dimensions (completeness, faithfulness, conciseness) guide extraction, synthesis, and verification — creating a consistent quality framework across all stages.
+9. **Summary levels for subscription tiers**: Three quality levels map naturally to Free/Standard/Premium subscriptions, with evaluation mode generating all levels for side-by-side comparison.

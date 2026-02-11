@@ -244,7 +244,8 @@ function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }
         (error) => {
           console.error('[SYNC] Auto-save error:', error);
         },
-        onTokenRefresh // Pass token refresh callback
+        onTokenRefresh, // Pass token refresh callback
+        sessionData.includeTimestamps !== false, // Pass timestamp preference
       );
 
       return () => {
@@ -365,7 +366,8 @@ function ActiveSession({ sessionData, user, onComplete, onStop, onTokenRefresh }
               refreshToken: user.refreshToken,
             },
             sessionData.patientName,
-            diagnosticInfo // Pass diagnostic info
+            diagnosticInfo, // Pass diagnostic info
+            sessionData.includeTimestamps !== false, // Pass timestamp preference
           );
 
           console.log('[SESSION] Final save result:', result);

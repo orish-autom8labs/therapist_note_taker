@@ -1,8 +1,8 @@
 # Product Requirements Document (PRD)
 # Therapist Note Taker Application
 
-**Version:** 1.0
-**Last Updated:** December 27, 2025
+**Version:** 2.0
+**Last Updated:** February 11, 2026
 **Product Owner:** Ori Shemesh
 **Technical Stack:** React (Frontend), FastAPI (Backend), Soniox SDK (Speech-to-Text)
 
@@ -38,6 +38,8 @@ A secure, real-time transcription application designed for therapists conducting
 3. **Speaker Identification**: Automatic differentiation between therapist and patient
 4. **Seamless Integration**: Direct save to Google Drive (Clinic/Transcripts folder)
 5. **Long Session Support**: Handles up to 60-minute sessions with automatic token refresh
+6. **AI Summarization**: Multi-level clinical summaries with faithfulness verification
+7. **Hebrew-First**: All output (transcripts, summaries, headers, speaker labels) in Hebrew
 
 ---
 
@@ -380,6 +382,111 @@ Optional email notification on session completion with Drive link.
 
 ---
 
+### F8: AI Summarization (Multi-Level)
+
+**Requirement ID:** SUMM-001
+**Priority:** Critical
+**Status:** Partially Implemented (upgrading to 3-stage pipeline)
+
+#### Description
+Three-stage AI summarization pipeline that produces clinical summaries at configurable quality levels. The pipeline uses structured extraction, synthesis, and optional faithfulness verification to produce accurate, grounded summaries.
+
+#### Summary Levels
+
+| Level | Name | Pipeline | Use Case |
+|-------|------|----------|----------|
+| 1 | Quick | Single-pass key topics (DeepSeek) | Free tier / quick overview |
+| 2 | Standard | Structured extraction → synthesis (DeepSeek + Claude Haiku) | Standard subscription |
+| 3 | Clinical | Extraction with quote-grounding + overlap → synthesis (Claude Sonnet) → faithfulness verification (Claude Haiku) | Premium subscription |
+
+#### Three-Stage Pipeline (Level 3)
+
+**Stage 1 — Structured Extraction** (per chunk, parallel):
+- Extract speakers, topics, emotions (with exact quotes), therapeutic moments, significant quotes, factual details
+- Quote-grounding: every claim must cite an exact quote from the transcript
+- Chain-of-thought self-check: model verifies its own extraction before submitting
+
+**Stage 2 — Synthesis** (single call):
+- Produces key topics (percentage breakdown) and detailed clinical notes
+- Anti-hallucination instructions: only state what's in the extractions
+- Uses patient's actual name throughout
+
+**Stage 3 — Faithfulness Verification** (single call):
+- Compares Stage 2 draft against Stage 1 extractions
+- Scores on rubric: completeness, faithfulness, conciseness
+- Outputs corrected final summary (not just evaluation)
+
+#### Evaluation Mode
+During development, all 3 levels are generated for every session and combined into one document. This allows side-by-side comparison by the reviewing psychologist. In production, only the level matching the user's subscription is generated.
+
+#### Acceptance Criteria
+- [ ] Level 1 produces key topics summary in under 5 seconds
+- [ ] Level 2 produces key topics + detailed notes with structured extraction
+- [ ] Level 3 produces verified summary with no ungrounded claims
+- [ ] All levels use patient name (not generic "the patient")
+- [ ] All output is in Hebrew
+- [ ] Costs tracked internally in Firestore (not visible to therapist)
+
+---
+
+### F9: Hebrew-First Transcript Formatting
+
+**Requirement ID:** FORMAT-001
+**Priority:** High
+**Status:** Implemented
+
+#### Description
+All transcript and summary output is in Hebrew with RTL-compatible formatting.
+
+#### Specifications
+- **Speaker labels**: Hebrew letters (דובר א׳, דובר ב׳) instead of English (Speaker A, Speaker B)
+- **Compact format**: No blank lines between speakers; speaker label on same line as text
+- **Timestamps**: Always present. Configurable frequency:
+  - Default: every ~5 minutes
+  - Frequent (checkbox): every ~1-2 minutes
+- **Inline timestamps**: `[MM:SS] דובר א׳: text...`
+- **Header**: Hebrew date format (DD/MM/YYYY), Hebrew labels
+- **RTL-friendly formatting**: No decorative `═══` lines (break RTL alignment in Google Docs). Use bold text headers only.
+
+#### Acceptance Criteria
+- [ ] Speaker labels in Hebrew throughout transcript and summary
+- [ ] Timestamps always present with configurable frequency
+- [ ] No RTL alignment issues when opened in Google Docs
+- [ ] Compact transcript format (no excessive whitespace)
+- [ ] Session setup shows timestamp frequency checkbox in Hebrew
+
+---
+
+### F10: Offline Summary CLI Tool
+
+**Requirement ID:** OFFLINE-001
+**Priority:** High
+**Status:** Planned
+
+#### Description
+Command-line tool for running summarization on existing transcript files without a live session. Essential for iterating on prompts, A/B testing configurations, and validating improvements.
+
+#### Usage
+```bash
+# Run all 3 levels on a transcript file
+python scripts/run_summary.py --transcript path/to/transcript.txt --patient "שם" --all-levels
+
+# Run a specific level
+python scripts/run_summary.py --transcript path/to/transcript.txt --patient "שם" --level clinical
+
+# Compare against annotated corrections
+python scripts/run_summary.py --transcript path/to/transcript.txt --patient "שם" --all-levels --compare path/to/annotations.docx
+```
+
+#### Acceptance Criteria
+- [ ] Reads transcript from local file (no Drive or server needed)
+- [ ] Runs any combination of summary levels
+- [ ] Outputs results to local file
+- [ ] Uses API keys from server/.env
+- [ ] Optional: compare mode against psychologist annotations
+
+---
+
 ## User Flows
 
 ### Flow 1: First-Time User - Complete Session
@@ -717,62 +824,94 @@ PORT=3001
 - **Drive Safeguards**: Duplicate summary detection, content size cap (500KB), max 1 error file per session
 - **Staging Environment**: Cloud Run revision tags for safe testing without affecting production
 
+### Hebrew-First Formatting
+- Hebrew speaker labels (דובר א׳, דובר ב׳) throughout transcripts and summaries
+- Compact transcript format (no blank lines between speakers)
+- Configurable timestamp frequency (1-2 min or 5 min)
+- Hebrew headers, date format, and patient name in all output
+- RTL-friendly formatting (no decorative lines that break alignment)
+
+### Multi-Level AI Summarization (In Progress)
+- Three summary levels: Quick, Standard, Clinical
+- Structured extraction in Stage 1 (replacing generic key points)
+- Quote-grounding: every claim must cite transcript text
+- Faithfulness verification in Stage 3 (Level 3 only)
+- Rubric-based framework: completeness, faithfulness, conciseness
+- Evaluation mode: all 3 levels in one document for psychologist review
+- Offline CLI tool for prompt iteration and A/B testing
+
 ## Future Enhancements
 
 ### Planned Features (Not Yet Implemented)
 
+**P0: Immediate (In Development)**
+1. **Subscription-Based Summary Tiers**
+   - Summary level tied to user subscription (Quick=Free, Standard=Basic, Clinical=Premium)
+   - Per-user subscription tracking
+   - Tier upgrade/downgrade flow
+
+2. **Offline Summary CLI Tool**
+   - Run summarization on existing transcripts locally
+   - A/B test different prompt configurations
+   - Compare against annotated corrections
+
 **P1: High Priority**
-1. **Custom Session Durations**
+3. **Custom Session Durations**
    - User-configurable max duration (30, 45, 60, 90 minutes)
    - Settings page to save preference
    - Per-user settings stored in backend
 
-2. **Transcript Editing**
+4. **Transcript Editing**
    - Edit transcript after session ends
    - Save edited version to Drive
    - Track editing history
 
-3. **Export Formats**
+5. **Export Formats**
    - PDF export with formatting
    - DOCX export for Word
    - JSON export for data analysis
 
-4. **Session Notes**
+6. **Session Notes**
    - Add notes/annotations during session
    - Tag important moments
    - Searchable notes in Drive
 
 **P2: Medium Priority**
-5. **Multi-Language Support**
-   - English transcription
-   - Arabic transcription
-   - UI language switching
-
-6. **Session History**
+7. **Session History**
    - List of past sessions
    - Quick access to Drive files
    - Search past transcripts
 
-7. **Analytics Dashboard**
+8. **Analytics Dashboard**
    - Session duration statistics
    - Word count metrics
    - Speaker balance analysis
 
-8. **Templates**
+9. **Templates**
    - Pre-defined session templates
    - Custom fields per template
    - Auto-fill patient information
 
-**P3: Low Priority**
-9. **Mobile App**
-   - Native iOS app
-   - Native Android app
-   - Offline support
+10. **Non-Verbal Sound Detection**
+    - Detect crying, laughing, sighs via audio classification
+    - Options: YAMNet (free, browser-based TensorFlow.js) or Hume AI (paid, most accurate)
+    - Annotate transcript with detected sounds
 
-10. **Team Features**
+**P3: Low Priority**
+11. **Mobile App**
+    - Native iOS app
+    - Native Android app
+    - Offline support
+
+12. **Team Features**
     - Multiple therapists in organization
     - Shared template library
     - Admin dashboard
+
+13. **Multi-Language Support**
+    - English transcription
+    - Arabic transcription
+    - UI language switching
 
 ---
 
@@ -833,6 +972,7 @@ PORT=3001
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0 | 2025-12-27 | Ori Shemesh / Claude | Initial comprehensive PRD with all implemented features |
+| 2.0 | 2026-02-11 | Ori Shemesh / Claude | Added multi-level summarization (F8), Hebrew-first formatting (F9), offline CLI tool (F10), subscription tiers, reliability upgrade, updated future enhancements |
 
 ---
 

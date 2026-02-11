@@ -16,7 +16,7 @@ const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:3001';
  * @param {Object} diagnosticInfo - Optional diagnostic info (stall events, etc.)
  * @returns {Promise<Object>} Server response with file info
  */
-export async function syncTranscript(sessionId, chunks, isFinal = false, userTokens = null, patientName = null, diagnosticInfo = null) {
+export async function syncTranscript(sessionId, chunks, isFinal = false, userTokens = null, patientName = null, diagnosticInfo = null, includeTimestamps = true) {
   try {
     const body = {
       sessionId,
@@ -39,6 +39,9 @@ export async function syncTranscript(sessionId, chunks, isFinal = false, userTok
     if (patientName) {
       body.patientName = patientName;
     }
+
+    // Add timestamp preference
+    body.includeTimestamps = includeTimestamps;
 
     // Add diagnostic info if provided (for debugging stall issues)
     if (diagnosticInfo) {
@@ -83,12 +86,12 @@ export async function syncTranscript(sessionId, chunks, isFinal = false, userTok
  * @param {Function} onTokenRefresh - Callback when tokens are refreshed
  * @returns {Function} Function to clear the interval
  */
-export function setupAutoSave(sessionId, getChunks, userTokens, patientName, onError, onTokenRefresh) {
+export function setupAutoSave(sessionId, getChunks, userTokens, patientName, onError, onTokenRefresh, includeTimestamps = true) {
   const interval = setInterval(async () => {
     try {
       const chunks = getChunks();
       if (chunks.length > 0) {
-        const result = await syncTranscript(sessionId, chunks, false, userTokens, patientName);
+        const result = await syncTranscript(sessionId, chunks, false, userTokens, patientName, null, includeTimestamps);
         console.log('[SYNC] Auto-saved transcript');
 
         // If tokens were refreshed, notify the caller

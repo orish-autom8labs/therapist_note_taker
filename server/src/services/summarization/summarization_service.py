@@ -13,17 +13,31 @@ from .chunking import SpeakerSegmentChunker, FixedTimeChunker, BaseChunker
 from .synthesis import (
     KeyTopicsSynthesizer,
     DetailedNotesSynthesizer,
+    FaithfulnessVerifier,
     BaseSynthesizer,
     ChunkSummary,
     SynthesisResult
 )
 from ...providers.llm import LLMProviderFactory, LLMProvider
+from ...config import SummaryLevelConfig, SUMMARY_LEVELS
 
 
 class SummaryStyle(Enum):
     """Available summary styles."""
     KEY_TOPICS = "key_topics"
     DETAILED_NOTES = "detailed_notes"
+
+
+@dataclass
+class LevelResult:
+    """Result of a single summary level."""
+    level_name: str
+    level_label_he: str
+    content: str
+    key_topics: Optional[str] = None
+    detailed_notes: Optional[str] = None
+    cost_usd: float = 0.0
+    chunk_count: int = 0
 
 
 @dataclass
@@ -39,6 +53,7 @@ class SummaryResult:
     total_cost_usd: float = 0.0
     error_report: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    level_results: List[LevelResult] = field(default_factory=list)
 
 
 class SummarizationService:
@@ -113,6 +128,292 @@ class SummarizationService:
             return self.config.openai_api_key
         else:
             raise ValueError(f"Unknown provider: {provider}")
+
+    def _create_provider(self, provider_name: str, model: str) -> LLMProvider:
+        """Create an LLM provider from name and model."""
+        return LLMProviderFactory.create(
+            provider_name=provider_name,
+            api_key=self._get_api_key(provider_name),
+            model=model
+        )
+
+    async def summarize_all_levels(
+        self,
+        transcript_buffer: List[Dict[str, Any]],
+        session_start_ms: int,
+        patient_name: str = "Unknown",
+        level_names: Optional[List[str]] = None,
+    ) -> SummaryResult:
+        """
+        Run multiple summary levels and combine results.
+
+        This is the main entry point for multi-level summarization.
+        Each level runs independently with its own configuration.
+
+        Args:
+            transcript_buffer: List of transcript tokens
+            session_start_ms: Session start time in milliseconds
+            patient_name: Patient name for summaries
+            level_names: Which levels to run (defaults to config.summary_levels)
+
+        Returns:
+            SummaryResult with all level results combined
+        """
+        try:
+            return await self._summarize_all_levels_internal(
+                transcript_buffer, session_start_ms, patient_name, level_names
+            )
+        except Exception as e:
+            error_report = self._format_error_report(
+                e, transcript_buffer, patient_name, session_start_ms
+            )
+            return SummaryResult(success=False, error_report=error_report)
+
+    async def _summarize_all_levels_internal(
+        self,
+        transcript_buffer: List[Dict[str, Any]],
+        session_start_ms: int,
+        patient_name: str,
+        level_names: Optional[List[str]],
+    ) -> SummaryResult:
+        """Internal multi-level summarization logic."""
+        if not transcript_buffer:
+            return SummaryResult(
+                success=True,
+                content="אין תוכן תמלול לסכם.",
+                language='he'
+            )
+
+        if level_names is None:
+            level_names = self.config.summary_levels
+
+        language = self.language_detector.detect(transcript_buffer)
+        total_cost = 0.0
+        level_results: List[LevelResult] = []
+
+        # Pre-compute shared resources: chunking (with and without overlap)
+        segments_with_overlap = None
+        segments_no_overlap = None
+
+        for level_name in level_names:
+            level_config = SUMMARY_LEVELS.get(level_name.strip())
+            if not level_config:
+                continue
+
+            level_result = await self._run_single_level(
+                transcript_buffer=transcript_buffer,
+                session_start_ms=session_start_ms,
+                patient_name=patient_name,
+                language=language,
+                level_config=level_config,
+            )
+            level_results.append(level_result)
+            total_cost += level_result.cost_usd
+
+        # Combine all level results into one document
+        content = self._format_multi_level_document(
+            level_results, patient_name, language
+        )
+
+        # Use the best available level for top-level fields
+        best_result = level_results[-1] if level_results else None
+
+        return SummaryResult(
+            success=True,
+            content=content,
+            key_topics=best_result.key_topics if best_result else None,
+            detailed_notes=best_result.detailed_notes if best_result else None,
+            language=language,
+            total_duration_minutes=0,  # Set by caller
+            chunk_count=best_result.chunk_count if best_result else 0,
+            total_cost_usd=total_cost,
+            level_results=level_results,
+            metadata={
+                'levels_generated': [r.level_name for r in level_results],
+                'stage1_provider': self.config.stage1_provider,
+                'stage1_model': self.config.stage1_model,
+            }
+        )
+
+    async def _run_single_level(
+        self,
+        transcript_buffer: List[Dict[str, Any]],
+        session_start_ms: int,
+        patient_name: str,
+        language: str,
+        level_config: SummaryLevelConfig,
+    ) -> LevelResult:
+        """Run a single summary level."""
+        total_cost = 0.0
+        chunk_summaries: List[ChunkSummary] = []
+
+        if level_config.use_chunking:
+            # Create chunker with or without overlap
+            if level_config.use_overlap:
+                chunker = SpeakerSegmentChunker(
+                    min_duration_minutes=self.config.stage1_chunk_minutes_min,
+                    max_duration_minutes=self.config.stage1_chunk_minutes_max,
+                    overlap_turns=3
+                )
+            else:
+                chunker = SpeakerSegmentChunker(
+                    min_duration_minutes=self.config.stage1_chunk_minutes_min,
+                    max_duration_minutes=self.config.stage1_chunk_minutes_max,
+                    overlap_turns=0
+                )
+
+            segments = chunker.chunk(transcript_buffer, session_start_ms)
+
+            if segments:
+                # Stage 1: Extract/summarize chunks
+                stage1_provider = self._get_stage1_provider()
+                chunk_summaries, stage1_cost = await self._summarize_chunks(
+                    segments, stage1_provider, language,
+                    use_structured_extraction=level_config.use_structured_extraction
+                )
+                total_cost += stage1_cost
+
+        # Stage 2: Synthesis
+        stage2_provider = self._create_provider(
+            level_config.stage2_provider, level_config.stage2_model
+        )
+        synthesis_results: Dict[str, str] = {}
+
+        if level_config.use_chunking and chunk_summaries:
+            # Normal multi-chunk synthesis
+            total_duration_ms = (
+                segments[-1].end_time_ms - segments[0].start_time_ms
+            ) if segments else 0
+            total_duration_minutes = max(1, int(total_duration_ms / 60_000))
+
+            for style_name in level_config.stage2_styles:
+                style = SummaryStyle(style_name)
+                synthesizer = self._create_synthesizer(
+                    style, stage2_provider, language, patient_name=patient_name
+                )
+                result = await synthesizer.synthesize(
+                    chunk_summaries, total_duration_minutes
+                )
+                synthesis_results[style_name] = result.content
+                total_cost += result.total_cost_usd
+        else:
+            # Quick mode: single pass on full transcript
+            total_duration_minutes = self._estimate_duration_minutes(
+                transcript_buffer, session_start_ms
+            )
+            for style_name in level_config.stage2_styles:
+                style = SummaryStyle(style_name)
+                synthesizer = self._create_synthesizer(
+                    style, stage2_provider, language, patient_name=patient_name
+                )
+                # Create a single pseudo-chunk from the full transcript
+                full_text = self._format_full_transcript_for_quick(
+                    transcript_buffer, session_start_ms
+                )
+                pseudo_chunk = ChunkSummary(
+                    summary=full_text,
+                    key_points=[],
+                    start_timestamp="00:00",
+                    end_timestamp=self.chunker.ms_to_timestamp(
+                        total_duration_minutes * 60_000
+                    ),
+                    speakers=[],
+                    raw_extraction=""
+                )
+                result = await synthesizer.synthesize(
+                    [pseudo_chunk], total_duration_minutes
+                )
+                synthesis_results[style_name] = result.content
+                total_cost += result.total_cost_usd
+
+        # Stage 3: Verification (if configured)
+        if level_config.use_verification and chunk_summaries:
+            verification_provider = self._create_provider(
+                level_config.verification_provider,
+                level_config.verification_model
+            )
+            verifier = FaithfulnessVerifier(
+                llm_provider=verification_provider,
+                prompt_loader=self.prompt_loader,
+                language=language,
+                patient_name=patient_name
+            )
+
+            # Verify each synthesis result
+            for style_name, draft_content in list(synthesis_results.items()):
+                verified = await verifier.verify(
+                    chunk_summaries, draft_content, patient_name
+                )
+                synthesis_results[style_name] = verified.content
+                total_cost += verified.total_cost_usd
+
+        # Build combined content for this level
+        content_parts = []
+        key_topics = synthesis_results.get('key_topics')
+        detailed_notes = synthesis_results.get('detailed_notes')
+
+        if key_topics:
+            content_parts.append(key_topics)
+        if detailed_notes:
+            content_parts.append(detailed_notes)
+
+        return LevelResult(
+            level_name=level_config.name,
+            level_label_he=level_config.label_he,
+            content='\n\n'.join(content_parts) if content_parts else "לא נוצר סיכום.",
+            key_topics=key_topics,
+            detailed_notes=detailed_notes,
+            cost_usd=total_cost,
+            chunk_count=len(chunk_summaries),
+        )
+
+    def _estimate_duration_minutes(
+        self,
+        transcript_buffer: List[Dict[str, Any]],
+        session_start_ms: int
+    ) -> int:
+        """Estimate total duration from transcript buffer."""
+        if not transcript_buffer:
+            return 0
+        first_ts = transcript_buffer[0].get('timestamp', 0)
+        last_ts = transcript_buffer[-1].get('timestamp', 0)
+        duration_ms = last_ts - first_ts
+        return max(1, int(duration_ms / 60_000))
+
+    def _format_full_transcript_for_quick(
+        self,
+        transcript_buffer: List[Dict[str, Any]],
+        session_start_ms: int
+    ) -> str:
+        """Format full transcript for quick single-pass mode."""
+        lines = []
+        current_speaker = None
+        for token in transcript_buffer:
+            speaker = token.get('speaker', 'Unknown')
+            text = token.get('text', '')
+            if not text.strip():
+                continue
+            if speaker != current_speaker:
+                lines.append(f"\nדובר {speaker}: {text}")
+                current_speaker = speaker
+            else:
+                lines.append(text)
+        return ' '.join(lines)
+
+    def _format_multi_level_document(
+        self,
+        level_results: List[LevelResult],
+        patient_name: str,
+        language: str,
+    ) -> str:
+        """Format all level results into one combined document."""
+        parts = []
+
+        for level_result in level_results:
+            header = f"**{level_result.level_label_he}**"
+            parts.append(f"{header}\n\n{level_result.content}")
+
+        return '\n\n---\n\n'.join(parts)
 
     async def summarize(
         self,
@@ -213,7 +514,8 @@ class SummarizationService:
             synthesizer = self._create_synthesizer(
                 style,
                 stage2_provider,
-                language
+                language,
+                patient_name=patient_name
             )
             result = await synthesizer.synthesize(
                 chunk_summaries,
@@ -269,18 +571,33 @@ class SummarizationService:
         self,
         segments: list,
         provider: LLMProvider,
-        language: str
+        language: str,
+        use_structured_extraction: bool = True
     ) -> tuple:
         """
-        Summarize chunks in parallel using Stage 1 provider.
+        Summarize/extract from chunks in parallel using Stage 1 provider.
+
+        Args:
+            segments: Transcript segments to process
+            provider: LLM provider for Stage 1
+            language: Language code
+            use_structured_extraction: If True, use new structured extraction prompt.
+                If False, use legacy chunk_summary prompt (for Level 1 quick mode).
 
         Returns:
             Tuple of (chunk_summaries, total_cost)
         """
-        # Load chunk summary prompt
-        chunk_prompt = self.prompt_loader.load('chunk_summary', language)
+        # Load appropriate prompt
+        if use_structured_extraction:
+            chunk_prompt = self.prompt_loader.load('chunk_extraction', language)
+            max_tokens = 2048
+            temperature = 0.1
+        else:
+            chunk_prompt = self.prompt_loader.load('chunk_summary', language)
+            max_tokens = 1024
+            temperature = 0.3
 
-        # Create summarization tasks
+        # Create extraction/summarization tasks
         tasks = []
         for segment in segments:
             prompt = chunk_prompt.format(
@@ -289,13 +606,15 @@ class SummarizationService:
                 end_time=segment.end_timestamp,
                 duration_minutes=f"{segment.duration_minutes:.1f}"
             )
-            tasks.append(provider.complete_with_retry(prompt, max_tokens=1024, temperature=0.3))
+            tasks.append(provider.complete_with_retry(
+                prompt, max_tokens=max_tokens, temperature=temperature
+            ))
 
         # Execute in parallel
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Process results
-        chunk_summaries = []
+        chunk_summaries: list[ChunkSummary] = []
         total_cost = 0.0
 
         for i, result in enumerate(results):
@@ -304,7 +623,7 @@ class SummarizationService:
             if isinstance(result, Exception):
                 # Handle individual chunk failure gracefully
                 chunk_summaries.append(ChunkSummary(
-                    summary=f"[Error summarizing chunk: {str(result)}]",
+                    summary=f"[שגיאה בחילוץ קטע: {str(result)}]",
                     key_points=[],
                     start_timestamp=segment.start_timestamp,
                     end_timestamp=segment.end_timestamp,
@@ -317,20 +636,35 @@ class SummarizationService:
                     key_points=key_points,
                     start_timestamp=segment.start_timestamp,
                     end_timestamp=segment.end_timestamp,
-                    speakers=list(segment.speakers)
+                    speakers=list(segment.speakers),
+                    raw_extraction=result.content if use_structured_extraction else ""
                 ))
                 total_cost += result.cost_usd
 
         return chunk_summaries, total_cost
 
     def _parse_chunk_response(self, content: str) -> tuple:
-        """Parse chunk summary response into key points and summary."""
-        key_points = []
+        """Parse chunk summary response into key points and summary.
+
+        Handles both legacy (KEY_POINTS + SUMMARY) and new structured
+        extraction format (SPEAKERS, TOPICS, EMOTIONS_EXPRESSED, etc.).
+        """
+        key_points: list[str] = []
         summary = ""
 
         lines = content.strip().split('\n')
         section = None
 
+        # Check if this is the new structured extraction format
+        is_structured = any(
+            s in content.upper()
+            for s in ['SPEAKERS:', 'TOPICS:', 'EMOTIONS_EXPRESSED:']
+        )
+
+        if is_structured:
+            return self._parse_structured_extraction(content)
+
+        # Legacy format parsing
         for line in lines:
             line_stripped = line.strip()
 
@@ -354,24 +688,82 @@ class SummarizationService:
 
         return key_points, summary.strip()
 
+    def _parse_structured_extraction(self, content: str) -> tuple:
+        """Parse new structured extraction format into key points and summary.
+
+        Returns (key_points, summary) for backward compatibility,
+        plus stores full extraction in the ChunkSummary.raw_extraction field.
+        """
+        sections: dict[str, list[str]] = {}
+        current_section = None
+        summary = ""
+
+        for line in content.strip().split('\n'):
+            line_stripped = line.strip()
+            line_upper = line_stripped.upper()
+
+            # Detect section headers
+            if line_upper.startswith('SPEAKERS:'):
+                current_section = 'speakers'
+                continue
+            elif line_upper.startswith('TOPICS:'):
+                current_section = 'topics'
+                continue
+            elif line_upper.startswith('EMOTIONS_EXPRESSED:') or line_upper.startswith('EMOTIONS:'):
+                current_section = 'emotions'
+                continue
+            elif line_upper.startswith('THERAPEUTIC_MOMENTS:') or line_upper.startswith('THERAPEUTIC MOMENTS:'):
+                current_section = 'therapeutic_moments'
+                continue
+            elif line_upper.startswith('SIGNIFICANT_QUOTES:') or line_upper.startswith('SIGNIFICANT QUOTES:'):
+                current_section = 'significant_quotes'
+                continue
+            elif line_upper.startswith('FACTUAL_DETAILS:') or line_upper.startswith('FACTUAL DETAILS:'):
+                current_section = 'factual_details'
+                continue
+            elif line_upper.startswith('ACTION_ITEMS:') or line_upper.startswith('ACTION ITEMS:'):
+                current_section = 'action_items'
+                continue
+            elif line_upper.startswith('SUMMARY:'):
+                current_section = 'summary'
+                continue
+
+            if current_section == 'summary' and line_stripped:
+                summary += line_stripped + ' '
+            elif current_section and line_stripped.startswith('-'):
+                point = line_stripped.lstrip('-').strip()
+                if point:
+                    sections.setdefault(current_section, []).append(point)
+
+        # Build key_points from topics + emotions for backward compatibility
+        key_points = sections.get('topics', []) + sections.get('emotions', [])
+
+        if not summary:
+            summary = content.strip()
+
+        return key_points, summary.strip()
+
     def _create_synthesizer(
         self,
         style: SummaryStyle,
         provider: LLMProvider,
-        language: str
+        language: str,
+        patient_name: str = 'Unknown'
     ) -> BaseSynthesizer:
         """Create synthesizer for the given style."""
         if style == SummaryStyle.KEY_TOPICS:
             return KeyTopicsSynthesizer(
                 llm_provider=provider,
                 prompt_loader=self.prompt_loader,
-                language=language
+                language=language,
+                patient_name=patient_name
             )
         elif style == SummaryStyle.DETAILED_NOTES:
             return DetailedNotesSynthesizer(
                 llm_provider=provider,
                 prompt_loader=self.prompt_loader,
-                language=language
+                language=language,
+                patient_name=patient_name
             )
         else:
             raise ValueError(f"Unknown summary style: {style}")

@@ -2,6 +2,9 @@
 
 You are creating a "Key Topics" summary for a therapy session.
 
+**Patient name: {patient_name}**
+Use this name whenever referring to the patient. Do not write "the patient" or "the client" generically - use their actual name.
+
 ## Session Chunk Summaries
 
 {chunk_summaries}

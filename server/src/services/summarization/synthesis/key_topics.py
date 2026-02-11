@@ -41,7 +41,8 @@ class KeyTopicsSynthesizer(BaseSynthesizer):
         prompt = prompt_template.format(
             chunk_summaries=formatted_chunks,
             total_chunks=len(chunk_summaries),
-            total_duration_minutes=total_duration_minutes
+            total_duration_minutes=total_duration_minutes,
+            patient_name=self.patient_name
         )
 
         # Generate synthesis (with retry on transient errors)
