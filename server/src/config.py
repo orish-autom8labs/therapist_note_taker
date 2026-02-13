@@ -88,6 +88,7 @@ class SummaryLevelConfig:
         use_verification: bool,
         verification_provider: str = '',
         verification_model: str = '',
+        use_speaker_merge: bool = False,
     ):
         self.name = name
         self.label_he = label_he
@@ -100,6 +101,7 @@ class SummaryLevelConfig:
         self.use_verification = use_verification
         self.verification_provider = verification_provider
         self.verification_model = verification_model
+        self.use_speaker_merge = use_speaker_merge
 
 
 # Pre-defined summary levels
@@ -138,6 +140,7 @@ SUMMARY_LEVELS: dict[str, SummaryLevelConfig] = {
         use_verification=True,
         verification_provider=os.getenv('SUMMARIZATION_STAGE3_PROVIDER', 'claude'),
         verification_model=os.getenv('SUMMARIZATION_STAGE3_MODEL', 'claude-3-haiku-20240307'),
+        use_speaker_merge=True,
     ),
 }
 

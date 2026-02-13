@@ -1,15 +1,19 @@
 """Main summarization service orchestrator."""
 
 import asyncio
+import logging
 import traceback
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import List, Dict, Any, Optional
 
+logger = logging.getLogger(__name__)
+
 from .language_detector import LanguageDetector
 from .prompt_loader import PromptLoader
 from .chunking import SpeakerSegmentChunker, FixedTimeChunker, BaseChunker
+from .preprocessing import SpeakerMerger
 from .synthesis import (
     KeyTopicsSynthesizer,
     DetailedNotesSynthesizer,
@@ -246,6 +250,17 @@ class SummarizationService:
         """Run a single summary level."""
         total_cost = 0.0
         chunk_summaries: List[ChunkSummary] = []
+
+        # Pre-processing: merge ghost speakers (3→2)
+        if level_config.use_speaker_merge:
+            merger = SpeakerMerger()
+            merge_result = merger.merge(transcript_buffer)
+            if merge_result.was_merged:
+                transcript_buffer = merge_result.buffer
+                logger.info(
+                    "[SPEAKER-MERGE] Level %s: merged speakers %s",
+                    level_config.name, merge_result.merge_map,
+                )
 
         if level_config.use_chunking:
             # Create chunker with or without overlap
