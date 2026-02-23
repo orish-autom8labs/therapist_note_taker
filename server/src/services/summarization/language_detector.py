@@ -50,7 +50,7 @@ class LanguageDetector:
             Language code: 'he' for Hebrew, 'en' for English
         """
         if not text:
-            return 'en'  # Default to English
+            return 'he'  # Default to Hebrew (Hebrew-first product)
 
         # Count Hebrew and total alphabetic characters
         hebrew_chars = sum(
@@ -60,7 +60,7 @@ class LanguageDetector:
         total_alpha = sum(1 for c in text if c.isalpha())
 
         if total_alpha == 0:
-            return 'en'  # Default to English for non-alphabetic text
+            return 'he'  # Default to Hebrew for non-alphabetic text
 
         hebrew_ratio = hebrew_chars / total_alpha
 

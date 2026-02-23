@@ -58,8 +58,8 @@ class PromptLoader:
         filepath = self.prompts_dir / filename
 
         if not filepath.exists():
-            # Fall back to English if language-specific doesn't exist
-            fallback_path = self.prompts_dir / f"{prompt_name}_en.md"
+            # Fall back to Hebrew (primary language with complete prompt set)
+            fallback_path = self.prompts_dir / f"{prompt_name}_he.md"
             if fallback_path.exists():
                 filepath = fallback_path
             else:
